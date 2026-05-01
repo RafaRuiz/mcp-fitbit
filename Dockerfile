@@ -16,9 +16,18 @@ RUN npm run build
 # ---------- Runtime stage ----------
 FROM node:20-alpine AS runtime
 
-# tini for signal handling, supergateway for stdio→SSE bridge
+# tini for signal handling, mcp-proxy for stdio→SSE bridge.
+#
+# Why mcp-proxy and not supergateway: supergateway shares ONE stdio child
+# across every inbound SSE client, but the MCP SDK's stdio transport is
+# strictly single-client — the second client to connect crashes the bridge
+# with "Already connected to a transport". claude.ai legitimately opens
+# multiple SSE connections during a session (initialise on one, then
+# reconnect for the persistent stream), which made supergateway unusable.
+# mcp-proxy spawns a fresh stdio child per SSE connection so each client
+# gets its own MCP process.
 RUN apk add --no-cache tini wget \
-    && npm install -g supergateway
+    && npm install -g mcp-proxy
 
 WORKDIR /app
 
@@ -37,7 +46,7 @@ COPY docker/entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
 ENV PORT=8000
-ENV SUPERGATEWAY_PORT=8001
+ENV BRIDGE_PORT=8001
 EXPOSE 8000
 
 # CapRover hits /health to detect zombie containers; route is unauthenticated.

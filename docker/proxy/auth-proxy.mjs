@@ -1,11 +1,11 @@
-// Bearer-auth wrapper around supergateway + OAuth passthrough.
+// Bearer-auth wrapper around mcp-proxy + OAuth passthrough.
 //
 // Layout:
 //   claude.ai ──HTTPS──▶ CapRover NGINX ──HTTP──▶ this proxy (8000)
 //                                                       │
 //                          ┌─── /health ────── (no auth) returns "ok"
 //                          ├─── /auth, /callback ── (no auth) ──▶ MCP OAuth (3000)
-//                          └─── everything else ─── (Bearer) ──▶ supergateway (8001) ──stdio──▶ MCP server
+//                          └─── everything else ─── (Bearer) ──▶ mcp-proxy (8001) ──stdio──▶ MCP server (fresh per SSE)
 //
 // Why we exist:
 //   1. Bearer-token auth so the public endpoint isn't open.
@@ -14,15 +14,18 @@
 //      OAuth flow from any browser (their phone, etc) without needing access
 //      to the host that runs the server.
 //
-// supergateway is spawned as a child so this proxy is the only top-level node
-// process — when supergateway dies we exit and CapRover restarts the container.
+// mcp-proxy is spawned as a child so this proxy is the only top-level node
+// process — when mcp-proxy dies we exit and CapRover restarts the container.
+// (We tried supergateway first; it shares one stdio child across all SSE
+// clients and the MCP SDK rejects the second connection. mcp-proxy spawns a
+// fresh child per SSE connection, which is what claude.ai needs.)
 
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { spawn } from 'node:child_process';
 
 const PORT = parseInt(process.env.PORT || '8000', 10);
-const SUPERGATEWAY_PORT = parseInt(process.env.SUPERGATEWAY_PORT || '8001', 10);
+const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || '8001', 10);
 const OAUTH_PORT = parseInt(process.env.OAUTH_PORT || '3000', 10);
 const TOKEN = process.env.MCP_BEARER_TOKEN;
 const MCP_COMMAND = process.env.MCP_COMMAND || 'node /app/build/index.js';
@@ -32,15 +35,28 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// ---- Spawn supergateway as a child ---------------------------------------
+// ---- Spawn mcp-proxy as a child ------------------------------------------
+// `--server sse` selects only the legacy SSE transport (claude.ai's BETA
+// connector UI uses SSE). `--shell` lets the inner command be a single
+// string. mcp-proxy spawns one stdio child per inbound SSE connection.
+const mcpCommandParts = MCP_COMMAND.split(/\s+/).filter(Boolean);
 const sg = spawn(
-  'supergateway',
-  ['--stdio', MCP_COMMAND, '--port', String(SUPERGATEWAY_PORT)],
+  'mcp-proxy',
+  [
+    '--port',
+    String(BRIDGE_PORT),
+    '--server',
+    'sse',
+    '--sseEndpoint',
+    '/sse',
+    '--',
+    ...mcpCommandParts,
+  ],
   { stdio: 'inherit', shell: false }
 );
 
 sg.on('exit', (code, signal) => {
-  console.error(`supergateway exited (code=${code} signal=${signal}); shutting down`);
+  console.error(`mcp-proxy exited (code=${code} signal=${signal}); shutting down`);
   process.exit(code ?? 1);
 });
 
@@ -141,7 +157,7 @@ app.use((req, _res, next) => {
 // they consume the request stream and break POSTs to /message.
 app.use(
   createProxyMiddleware({
-    target: `http://127.0.0.1:${SUPERGATEWAY_PORT}`,
+    target: `http://127.0.0.1:${BRIDGE_PORT}`,
     changeOrigin: true,
     // No selfHandleResponse — let the underlying http-proxy stream as-is so
     // SSE chunks aren't buffered.
@@ -188,7 +204,7 @@ app.use(
 
 const server = app.listen(PORT, () => {
   console.log(
-    `auth-proxy listening on :${PORT} → supergateway :${SUPERGATEWAY_PORT}, oauth :${OAUTH_PORT}`
+    `auth-proxy listening on :${PORT} → mcp-proxy :${BRIDGE_PORT}, oauth :${OAUTH_PORT}`
   );
 });
 
