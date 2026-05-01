@@ -18,9 +18,10 @@ Give your AI assistant access to your Fitbit data for personalized health insigh
 ⚖️ **Weight Tracking** - Access weight trends over time  
 ❤️ **Heart Rate Data** - Monitor heart rate patterns and zones  
 🍎 **Nutrition Logs** - Review food intake, calories, and macros  
+🥗 **Log Foods & Meals** - Chat to log meals with full macro/micro detail (kcal, protein, carbs, sat/trans fat, fiber, sodium, vitamins, minerals…), water, custom foods, and saved meals  
 👤 **Profile Info** - Access basic Fitbit profile details
 
-*Ask your AI things like: "Show me my sleep patterns this week" or "What's my average heart rate during workouts?"*
+*Ask your AI things like: "Show me my sleep patterns this week", "What's my average heart rate during workouts?", or "Log my breakfast: 2 eggs, 1 slice toast, 200g Greek yogurt with the nutrition values".*
 
 ## Quick Start
 
@@ -133,6 +134,8 @@ Both options open the **MCP Inspector** at `http://localhost:5173` where you can
 
 ## Available Tools
 
+### Read tools
+
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `get_weight` | Weight data over time periods | `period`: `1d`, `7d`, `30d`, `3m`, `6m`, `1y` |
@@ -147,11 +150,50 @@ Both options open the **MCP Inspector** at `http://localhost:5173` where you can
 | `get_food_log` | Complete nutrition data for a day | `date` (YYYY-MM-DD or "today") |
 | `get_nutrition` | Individual nutrient over time | `resource`, `period`, optional `date` |
 | `get_nutrition_by_date_range` | Individual nutrient for date range | `resource`, `startDate`, `endDate` |
+| `search_foods` | Search Fitbit's public + your private food database | `query` |
+| `get_food` | Full details for a specific food | `foodId` |
+| `get_food_units` | List of valid Fitbit food units (id → name) | None |
+| `get_food_locales` | Locales supported by the foods database | None |
+| `get_water_log` | Water entries and total for a date | `date` |
+| `get_meals` | All saved meals | None |
+| `get_meal` | A single saved meal | `mealId` |
+| `get_favorite_foods` | Favorite foods | None |
+| `get_recent_foods` | Recently consumed foods | None |
+| `get_frequent_foods` | Frequently consumed foods | None |
 | `get_profile` | User profile information | None |
+
+### Write tools (nutrition)
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `log_food` | Log a food entry with full macro/micro detail. Provide either `foodId` (from `search_foods`) or `foodName` + nutrition values for a one-off custom entry. | `date`, `mealTypeId`, `unitId`, `amount`, plus `foodId`/`favorite` OR `foodName`/`brandName`/`calories`/`totalFat`/`saturatedFat`/`transFat`/`cholesterol`/`sodium`/`potassium`/`totalCarbohydrate`/`dietaryFiber`/`sugars`/`protein`/`vitamin*`/`calcium`/`iron`/`magnesium`/etc. |
+| `update_food_log` | Update quantity/calories on an existing food log entry | `foodLogId`, optional `mealTypeId`/`unitId`/`amount`/`calories` |
+| `delete_food_log` | Remove a food log entry | `foodLogId` |
+| `create_food` | Save a private (custom) food with full nutrition | `name`, `defaultFoodMeasurementUnitId`, `defaultServingSize`, `calories`, optional `formType`/`description`/all macro/micro fields |
+| `delete_custom_food` | Delete one of your private foods | `foodId` |
+| `log_water` | Log a water entry | `date`, `amount`, optional `unit` (`ml`, `fl oz`, `cup`) |
+| `update_water_log` | Update an existing water entry | `waterLogId`, `amount`, optional `unit` |
+| `delete_water_log` | Remove a water entry | `waterLogId` |
+| `create_meal` | Save a meal made of multiple foods | `name`, `description`, `mealFoods[]` (`{foodId, amount, unitId}`) |
+| `update_meal` | Replace the contents of a saved meal | `mealId`, `name`, `description`, `mealFoods[]` |
+| `delete_meal` | Delete a saved meal | `mealId` |
+| `add_favorite_food` | Add a food to favorites | `foodId` |
+| `delete_favorite_food` | Remove a food from favorites | `foodId` |
+
+**Meal type IDs (`mealTypeId`):** `1`=Breakfast, `2`=Morning Snack, `3`=Lunch, `4`=Afternoon Snack, `5`=Dinner, `7`=Anytime.
 
 **Nutrition resources:** `caloriesIn`, `water`, `protein`, `carbs`, `fat`, `fiber`, `sodium`
 
 **Activity time series resources:** `steps`, `distance`, `calories`, `activityCalories`, `caloriesBMR`, `tracker/activityCalories`, `tracker/calories`, `tracker/distance`
+
+### Logging meals from chat
+
+Typical workflow when chatting with your AI assistant:
+
+1. *"Log my lunch: 150g grilled chicken, 200g rice, 1 cup broccoli."*
+2. The assistant calls `search_foods` for each item to look up `foodId` + `unitId`.
+3. It calls `log_food` once per item with `date`, `mealTypeId=3`, `unitId`, `amount`.
+4. For one-off or custom dishes (e.g. *"my homemade lasagna with these macros…"*), it uses `log_food` with `foodName` plus `calories`, `protein`, `totalFat`, `saturatedFat`, `transFat`, `dietaryFiber`, `sodium`, etc., or it can `create_food` first to get a reusable `foodId` and then `log_food` by id.
 
 ### Claude Desktop
 

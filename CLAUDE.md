@@ -27,7 +27,7 @@ MCP server for Fitbit API integration providing health data access (weight, slee
 - `src/activities.ts` - Exercise/activity data tool (date range)
 - `src/profile.ts` - User profile tool
 - `src/heart-rate.ts` - Heart rate data tools (time series and date range)
-- `src/nutrition.ts` - Nutrition data tools (comprehensive food log with macros, plus time series for individual nutrients)
+- `src/nutrition.ts` - Nutrition tools: read (food log, time series, search, units, locales, meals, favorites/recent/frequent) AND write (log_food with full macros/micros, create_food, update/delete food log, log/update/delete water, create/update/delete meals, add/delete favorite foods)
 - `src/daily-activity.ts` - Daily activity summary tool (steps, calories, goals, heart rate zones)
 - `src/activity-goals.ts` - Activity goals tool (daily/weekly goals)
 - `src/activity-timeseries.ts` - Activity time series tool (steps, distance, calories over time)
@@ -55,7 +55,9 @@ MCP server for Fitbit API integration providing health data access (weight, slee
 **Production mode:**
 1. `npm run build` - Compile TypeScript
 2. `npm run start` - Run server directly
-3. Tools available after auth: get_weight, get_sleep_by_date_range, get_exercises, get_daily_activity_summary, get_activity_goals, get_activity_timeseries, get_azm_timeseries, get_profile, get_heart_rate, get_heart_rate_by_date_range, get_food_log, get_nutrition, get_nutrition_by_date_range
+3. Tools available after auth:
+   - **Read:** get_weight, get_sleep_by_date_range, get_exercises, get_daily_activity_summary, get_activity_goals, get_activity_timeseries, get_azm_timeseries, get_profile, get_heart_rate, get_heart_rate_by_date_range, get_food_log, get_nutrition, get_nutrition_by_date_range, search_foods, get_food, get_food_units, get_food_locales, get_water_log, get_meals, get_meal, get_favorite_foods, get_recent_foods, get_frequent_foods
+   - **Write (nutrition):** log_food, update_food_log, delete_food_log, create_food, delete_custom_food, log_water, update_water_log, delete_water_log, create_meal, update_meal, delete_meal, add_favorite_food, delete_favorite_food
 
 ## Environment Setup
 Requires `.env` file with:

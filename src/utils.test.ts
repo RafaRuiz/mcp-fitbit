@@ -145,6 +145,70 @@ describe('Utility Functions', () => {
         expect.any(Object)
       );
     });
+
+    it('should skip the /user/-/ prefix when skipUserPrefix is true', async () => {
+      mockGetAccessTokenFn.mockResolvedValue('test_token');
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+        status: 200,
+      });
+
+      await makeFitbitRequest(
+        'foods/search.json?query=banana',
+        mockGetAccessTokenFn,
+        FITBIT_API_VERSIONS.V1,
+        { skipUserPrefix: true }
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        `${FITBIT_API_VERSIONS.V1}/foods/search.json?query=banana`,
+        expect.objectContaining({ method: 'GET' })
+      );
+    });
+
+    it('should issue POST with body and Content-Type when body is supplied', async () => {
+      mockGetAccessTokenFn.mockResolvedValue('test_token');
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true }),
+        status: 201,
+      });
+      const body = JSON.stringify({ name: 'Breakfast', mealFoods: [] });
+
+      await makeFitbitRequest(
+        'meals.json',
+        mockGetAccessTokenFn,
+        FITBIT_API_VERSIONS.V1,
+        { method: 'POST', body, contentType: 'application/json' }
+      );
+
+      const fetchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fetchCall[0]).toBe(`${FITBIT_API_VERSIONS.V1}/user/-/meals.json`);
+      expect(fetchCall[1].method).toBe('POST');
+      expect(fetchCall[1].body).toBe(body);
+      expect(fetchCall[1].headers['Content-Type']).toBe('application/json');
+    });
+
+    it('should issue DELETE without a body', async () => {
+      mockGetAccessTokenFn.mockResolvedValue('test_token');
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        status: 204,
+        json: async () => null,
+      });
+
+      const result = await makeFitbitRequest(
+        'foods/log/123.json',
+        mockGetAccessTokenFn,
+        FITBIT_API_VERSIONS.V1,
+        { method: 'DELETE' }
+      );
+      expect(result).toEqual({});
+      const fetchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fetchCall[1].method).toBe('DELETE');
+      expect(fetchCall[1].body).toBeUndefined();
+      expect(fetchCall[1].headers['Content-Type']).toBeUndefined();
+    });
   });
 
   describe('Response Helper Functions', () => {

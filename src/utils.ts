@@ -27,18 +27,41 @@ export type ToolResponseStructure = {
 };
 
 /**
+ * Options that customise a single call to {@link makeFitbitRequest}.
+ *
+ * `skipUserPrefix` is required for endpoints that aren't user-scoped (e.g.
+ * `/foods/search.json`, `/foods/units.json`). For all other endpoints the
+ * default prefix `/user/-/` is added automatically.
+ */
+export interface FitbitRequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  body?: string;
+  contentType?: string;
+  skipUserPrefix?: boolean;
+}
+
+/**
  * Makes a generic request to the Fitbit API.
  * Handles adding the base URL, authorization header, and basic error handling.
  * @param endpoint The specific API endpoint path (e.g., '/body/weight/date/today/30d.json').
  * @param getAccessTokenFn A function that returns the current valid access token or null.
  * @param apiBase The base URL for the API (defaults to v1, can be overridden for different API versions)
+ * @param options HTTP method, body, and routing options for write endpoints.
  * @returns A promise resolving to the parsed JSON response (type T) or null if the request fails.
  */
 export async function makeFitbitRequest<T>(
   endpoint: string,
   getAccessTokenFn: () => Promise<string | null>,
-  apiBase: string = FITBIT_API_VERSIONS.V1
+  apiBase: string = FITBIT_API_VERSIONS.V1,
+  options: FitbitRequestOptions = {}
 ): Promise<T | null> {
+  const {
+    method = 'GET',
+    body,
+    contentType,
+    skipUserPrefix = false,
+  } = options;
+
   const currentAccessToken = await getAccessTokenFn();
   if (!currentAccessToken) {
     console.error(`Error: ${ERROR_MESSAGES.NO_ACCESS_TOKEN}`);
@@ -49,18 +72,24 @@ export async function makeFitbitRequest<T>(
   const cleanEndpoint = endpoint.startsWith('/')
     ? endpoint.substring(1)
     : endpoint;
-  // Construct the full URL including the user scope '-'.
-  const url = `${apiBase}/user/-/${cleanEndpoint}`;
-  console.error(`Attempting Fitbit API request to: ${url}`);
+  // Construct the full URL. Most endpoints are user-scoped (`/user/-/...`),
+  // but a few (e.g. `/foods/search`, `/foods/units`) are not.
+  const url = skipUserPrefix
+    ? `${apiBase}/${cleanEndpoint}`
+    : `${apiBase}/user/-/${cleanEndpoint}`;
+  console.error(`Attempting Fitbit API request: ${method} ${url}`);
 
-  const headers = {
+  const headers: Record<string, string> = {
     'User-Agent': HTTP_CONFIG.USER_AGENT,
     Authorization: `Bearer ${currentAccessToken}`,
     Accept: 'application/json',
   };
+  if (body !== undefined) {
+    headers['Content-Type'] = contentType ?? 'application/json';
+  }
 
   try {
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { method, headers, body });
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(
