@@ -89,11 +89,37 @@ const oauthProxy = createProxyMiddleware({
 app.all('/auth', oauthProxy);
 app.all('/callback', oauthProxy);
 
-// Bearer gate for everything else. Reject early.
+// Bearer gate for everything else.
+//
+// Accepted forms (any one is enough):
+//   1. `Authorization: Bearer <MCP_BEARER_TOKEN>` header (preferred)
+//   2. `?token=<MCP_BEARER_TOKEN>` query string parameter
+//
+// (2) exists because claude.ai's BETA "Add custom connector" UI as of writing
+// only supports either no auth or full OAuth — there is nowhere to enter a
+// shared secret. Putting the secret in the URL is less safe than a header
+// (visible in browser history / NGINX access logs if those are enabled), but
+// since the channel is HTTPS the token is encrypted in transit, and for
+// personal/family use this is an acceptable trade-off. If you ever expose
+// access logs, scrub the query string with a custom NGINX log_format.
 app.use((req, res, next) => {
-  if (req.headers.authorization === `Bearer ${TOKEN}`) return next();
+  const fromHeader = req.headers.authorization === `Bearer ${TOKEN}`;
+  const fromQuery =
+    typeof req.query.token === 'string' && req.query.token === TOKEN;
+  if (fromHeader || fromQuery) return next();
   res.set('WWW-Authenticate', 'Bearer');
   res.status(401).type('text/plain').send('unauthorized\n');
+});
+
+// If the token came via query string, strip it before forwarding upstream so
+// supergateway (and its stdio child) never see our shared secret.
+app.use((req, _res, next) => {
+  if (req.query.token !== undefined) {
+    const u = new URL(req.url, 'http://internal');
+    u.searchParams.delete('token');
+    req.url = u.pathname + (u.search || '');
+  }
+  next();
 });
 
 // MCP traffic — supergateway exposes /sse, /message, etc.
