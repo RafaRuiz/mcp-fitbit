@@ -1,39 +1,48 @@
 # Despliegue en CapRover (rama `deploy`)
 
-Esta rama añade los archivos necesarios para correr `mcp-fitbit` como Remote MCP
+Esta rama añade lo necesario para correr `mcp-fitbit` como **Remote MCP**
 detrás de Bearer auth, encima de [supergateway](https://github.com/supercorp-ai/supergateway)
 (que convierte el transporte stdio del MCP en SSE). La rama `main` se mantiene
-limpia para la PR upstream.
+limpia para la PR upstream de las nuevas tools de nutrición.
 
 ```
 claude.ai (web/móvil) ──HTTPS──▶ CapRover NGINX ──HTTP──▶ auth-proxy (8000)
                                                               │
-                                                              ▼ proxy_pass
-                                                       supergateway (8001)
-                                                              │
-                                                              ▼ stdio
-                                                       node build/index.js
+                                       ┌── /health ──────── (sin auth) ──▶ ok
+                                       ├── /auth, /callback ─ (sin auth) ──▶ MCP OAuth (3000)
+                                       └── /sse, /message ─── (Bearer)  ──▶ supergateway (8001) ──▶ MCP stdio
 ```
+
+**Sin SSH ni SCP**: el usuario hace OAuth desde cualquier navegador (móvil,
+portátil, lo que sea) visitando `https://tu-app.tudominio.com/auth`.
 
 ## Arquitectura para 2 personas
 
 Una sola imagen Docker, **dos apps en CapRover** completamente aisladas:
 
-| App                    | Volumen `/data`       | Bearer secret    | Endpoint público                          |
-| ---------------------- | --------------------- | ---------------- | ----------------------------------------- |
-| `mcp-fitbit-rafa`      | tu `.fitbit-token.json`| el tuyo          | `https://fitbit-rafa.tudominio.com/sse`   |
-| `mcp-fitbit-paula`     | el suyo               | el suyo          | `https://fitbit-paula.tudominio.com/sse`  |
+| App                | Volumen `/data`         | Bearer secret  | Endpoint                                  | Quién lo usa            |
+| ------------------ | ----------------------- | -------------- | ----------------------------------------- | ----------------------- |
+| `mcp-fitbit-rafa`  | tu `.fitbit-token.json` | el tuyo        | `https://fitbit-rafa.tudominio.com/sse`   | Tu Claude (web + móvil) |
+| `mcp-fitbit-paula` | el suyo                 | el suyo        | `https://fitbit-paula.tudominio.com/sse`  | El Claude de tu mujer   |
 
-Cada Claude (el tuyo y el de tu mujer) añade **su** Remote MCP Connector
-apuntando a **su** endpoint con **su** Bearer.
+Cada Claude (el tuyo y el de ella) añade **su** Remote MCP Connector apuntando
+a **su** endpoint con **su** Bearer.
 
 ## Pre-requisitos
 
-1. CapRover instalado y funcionando con Let's Encrypt activo en el wildcard.
+1. CapRover funcionando con Let's Encrypt activo en el wildcard.
 2. Una app de desarrollador en [dev.fitbit.com](https://dev.fitbit.com) con
-   `Callback URL = http://localhost:3000/callback` (esto es porque el OAuth
-   inicial lo haces en local — no necesitas registrar una URL pública).
+   **OAuth 2.0 Application Type = Personal**, y en **Callback URL** añadidas
+   las URLs públicas que vayas a usar (Fitbit acepta varias separadas por coma):
+   ```
+   https://fitbit-rafa.tudominio.com/callback,https://fitbit-paula.tudominio.com/callback,http://localhost:3000/callback
+   ```
+   Mantén la de `localhost:3000` por si quieres correrlo en local algún día.
 3. Tu fork de `mcp-fitbit` en GitHub con la rama `deploy` pusheada.
+
+> Las dos apps pueden compartir las mismas Fitbit `CLIENT_ID/SECRET` — Fitbit
+> distingue usuarios por el access token, no por el client. Si prefieres
+> aislar por completo, cada persona puede tener su propia Fitbit dev app.
 
 ## Pasos por instancia (repetir para cada persona)
 
@@ -42,40 +51,39 @@ apuntando a **su** endpoint con **su** Bearer.
 1. **Apps → Create New App** → nombre `mcp-fitbit-<persona>` (ej. `mcp-fitbit-rafa`).
 2. Marcar **"Has Persistent Data"** ANTES de crear (no se puede activar después).
 
-### 2. Configurar el deploy desde GitHub
+### 2. Configurar deploy desde GitHub
 
-1. **App Configs → Deployment** → **Method 3: Deploy from Github/Bitbucket/Gitlab**.
+1. **App Configs → Deployment → Method 3: Deploy from Github/Bitbucket/Gitlab**.
 2. Repo: `https://github.com/<tu-usuario>/mcp-fitbit`
 3. Branch: `deploy`
 4. Username + Personal Access Token (si el repo es privado).
-5. Copia el **Webhook URL** que CapRover te da y pégalo en GitHub →
-   Settings → Webhooks (sólo si quieres auto-deploy en cada push).
+5. Copia el **Webhook URL** y pégalo en GitHub → Settings → Webhooks (sólo si
+   quieres auto-deploy en cada push).
 6. **"Force Build"** para arrancar la primera build manualmente.
 
 ### 3. Variables de entorno
 
-**App Configs → Environmental Variables** (cada app las suyas):
+**App Configs → Environmental Variables**:
 
 ```
 FITBIT_CLIENT_ID=<tu Fitbit dev client id>
 FITBIT_CLIENT_SECRET=<tu Fitbit dev client secret>
-MCP_BEARER_TOKEN=<genera con: openssl rand -hex 32>
+MCP_BEARER_TOKEN=<openssl rand -hex 32>
+OAUTH_REDIRECT_URI=https://fitbit-<persona>.tudominio.com/callback
 ```
 
-> El mismo `FITBIT_CLIENT_ID/SECRET` puede usarse para las dos apps — Fitbit
-> distingue usuarios por el access token, no por el client. Lo que tiene que
-> ser distinto entre apps es el `MCP_BEARER_TOKEN` (cada uno el suyo).
+> El `OAUTH_REDIRECT_URI` debe coincidir EXACTAMENTE con una de las callback
+> URLs registradas en tu Fitbit dev app.
 
 ### 4. Volumen persistente
 
 **App Configs → Persistent Directories** → Add:
 
-| Path in App | Label                    |
-| ----------- | ------------------------ |
+| Path in App | Label                       |
+| ----------- | --------------------------- |
 | `/data`     | `mcp-fitbit-<persona>-data` |
 
-Sin esto, el `.fitbit-token.json` se pierde en cada redeploy y hay que rehacer
-OAuth.
+Sin esto, el `.fitbit-token.json` se pierde en cada redeploy.
 
 ### 5. NGINX: imprescindible para SSE
 
@@ -92,7 +100,7 @@ location / {
     proxy_pass http://$$cap_appname$$:$$cap_application_port$$;
     proxy_http_version 1.1;
 
-    # SSE necesita streams sin buffer ni cache.
+    # SSE: streams sin buffer ni cache.
     proxy_buffering off;
     proxy_cache off;
     proxy_set_header X-Accel-Buffering no;
@@ -118,89 +126,81 @@ y claude.ai parece colgarse.
 ### 6. Una réplica, no más
 
 **App Configs → Instance Count** = `1`. Si subes a 2+, dos containers podrían
-refrescar el access token a la vez y perder la rotación del refresh token de
-Fitbit. Para uso personal, una réplica sobra.
+refrescar el access token a la vez y perder rotaciones del refresh token. Para
+uso personal, una réplica sobra.
 
-### 7. OAuth inicial — desde tu Mac
+### 7. OAuth — desde cualquier navegador
 
-⚠️ **Cuidado con la sesión del navegador.** Si tu mujer y tú vais a OAuth en el
-mismo Mac, el navegador puede tener una sesión de Fitbit activa y reusarla
-silenciosamente. Para cada flow:
+Una vez deployada la app y verde el `/health`:
 
-1. **Cerrar sesión en fitbit.com** en el navegador.
-2. Borrar el token local: `rm /Users/<tu>/SourceTree/Miscellany/mcp-fitbit/.fitbit-token.json`
-3. Reiniciar Claude Desktop completamente (⌘Q + matar procesos en Activity Monitor).
-4. Pedirle a Claude algo que toque Fitbit (ej. *"get my Fitbit profile"*).
-5. El navegador abre el consent screen de Fitbit. Logear con la cuenta correcta
-   y marcar **"View and Log"** en cada categoría (no "View only").
-6. El token aparece en `/Users/<tu>/SourceTree/Miscellany/mcp-fitbit/.fitbit-token.json`.
+1. La persona (en su móvil o portátil, donde sea) abre:
+   ```
+   https://fitbit-<persona>.tudominio.com/auth
+   ```
+2. Redirige a Fitbit. **Logear con la cuenta de Fitbit que toca** (cuidado si
+   compartís navegador — cerrar sesión de Fitbit primero si hace falta).
+3. Pantalla de consent: en cada categoría que aparezca (Nutrition, Activity,
+   Sleep, Weight, Heart Rate), seleccionar **"View and Log"** (NO "View
+   only"), si no las tools de write devolverán 403.
+4. Redirige a `https://fitbit-<persona>.tudominio.com/callback?code=...`.
+5. Mensaje "Authorization successful! You can close this window."
+6. El `.fitbit-token.json` queda guardado en el volumen `/data` de la app.
 
-### 8. Subir el token al volumen de CapRover
+Repetir lo mismo para la otra persona en su URL.
 
-SSH al host de CapRover y copiar el archivo al directorio del volumen:
+> **Heads-up sobre sesiones de navegador**: si los dos vais a OAuth en el
+> mismo navegador (mismo equipo, misma cuenta de macOS), podéis arrastrar la
+> sesión de Fitbit del primer flow al segundo y autorizar con la cuenta
+> equivocada. Para evitarlo: pestaña incógnito para el segundo flow, o cerrar
+> sesión de fitbit.com entre uno y otro.
 
-```bash
-# Desde tu Mac, primero copia el token al servidor:
-scp /Users/<tu>/SourceTree/Miscellany/mcp-fitbit/.fitbit-token.json \
-    root@<tu-caprover-host>:/tmp/fitbit-token-rafa.json
-
-# Luego, en el servidor, mueve al volumen correcto:
-ssh root@<tu-caprover-host>
-mv /tmp/fitbit-token-rafa.json \
-   /captain/data/srv-captain--mcp-fitbit-rafa-data/.fitbit-token.json
-chown 1000:1000 /captain/data/srv-captain--mcp-fitbit-rafa-data/.fitbit-token.json
-```
-
-Ajusta el path del volumen al label exacto que pusiste en el paso 4 (CapRover
-le añade el prefijo `srv-captain--`).
-
-### 9. Reiniciar el container
-
-CapRover → la app → **Deploy** → **"Restart App"**. Confirma en los logs:
-
-```
-[entrypoint] (no warning sobre token missing)
-auth-proxy listening on :8000 → supergateway :8001
-```
-
-Health check: `curl https://fitbit-rafa.tudominio.com/health` → `ok`.
-
-### 10. Añadir el Remote MCP Connector en claude.ai
+### 8. Añadir el Remote MCP Connector en claude.ai
 
 claude.ai → **Settings → Connectors → Add custom connector**:
 
-- **URL**: `https://fitbit-rafa.tudominio.com/sse`
-- **Authentication**: `Bearer <MCP_BEARER_TOKEN>` (el que generaste en el paso 3)
+- **URL**: `https://fitbit-<persona>.tudominio.com/sse`
+- **Authentication**: `Bearer <MCP_BEARER_TOKEN>` (el del paso 3)
 
-Cuando tu mujer añada el suyo, lo hace desde **su** cuenta de Claude, con la
-URL y bearer de **su** app. Claude.ai lo verá automáticamente desde su móvil.
-
-## Después de hacer todo eso, repetir desde el paso 1 para la segunda persona.
+Tu mujer hace lo mismo en SU cuenta de Claude con SU URL y SU bearer. El móvil
+ya lo ve automáticamente.
 
 ## Operativa diaria
 
-- **Token refresh**: el container lo hace solo. No hay que tocar nada hasta
-  que el refresh token caduque (Fitbit los rota — pueden durar meses).
-- **Cuando caduque**: rehacer pasos 7–9 para esa persona. Avisará con un 401
-  en los logs.
-- **Actualizar código** (nuevas tools en la rama `main`):
-
+- **Token refresh**: el container lo hace solo (refresh tokens duran meses).
+  No hay que tocar nada.
+- **Cuando algo se rompa** (refresh token caducó, scopes cambian, lo que sea):
+  visitar `/auth` desde cualquier navegador y rehacer el OAuth. Sin SSH.
+- **Actualizar código** (nuevas tools, fixes en `main`):
   ```bash
   git checkout deploy
   git merge main
   git push origin deploy
   ```
-
   CapRover detecta el push y rebuilds (si tienes el webhook). Si no, **Force
   Build** desde la UI.
 
+## Variables de entorno: referencia completa
+
+| Variable               | Default                          | Notas                                                                                              |
+| ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `FITBIT_CLIENT_ID`     | (requerido)                      | De tu Fitbit dev app.                                                                              |
+| `FITBIT_CLIENT_SECRET` | (requerido)                      | De tu Fitbit dev app.                                                                              |
+| `MCP_BEARER_TOKEN`     | (requerido)                      | Secret que claude.ai manda en `Authorization: Bearer ...`. Genera con `openssl rand -hex 32`.      |
+| `OAUTH_REDIRECT_URI`   | `http://localhost:3000/callback` | URL pública del callback. Debe coincidir con una registrada en tu Fitbit dev app.                  |
+| `OAUTH_PORT`           | `3000`                           | Puerto interno donde escucha el OAuth express server. No suele hacer falta cambiarlo.              |
+| `OAUTH_PERSISTENT`     | `true` (lo pone `entrypoint.sh`) | Si `true`, el OAuth server queda vivo entre flows para permitir re-auth.                           |
+| `PORT`                 | `8000`                           | Puerto del auth-proxy. CapRover suele detectarlo solo.                                             |
+| `SUPERGATEWAY_PORT`    | `8001`                           | Puerto interno de supergateway. No suele hacer falta cambiarlo.                                    |
+
 ## Troubleshooting
 
-| Síntoma                                     | Causa probable                                              |
-| ------------------------------------------- | ----------------------------------------------------------- |
-| `/health` devuelve 200 pero `/sse` cuelga   | NGINX no está con `proxy_buffering off` (ver paso 5).       |
-| `401 unauthorized` en claude.ai             | Bearer mal copiado — sin el prefijo `Bearer ` o con espacios.|
-| Logs: `MCP_BEARER_TOKEN must be set`        | Falta la env var. Paso 3.                                   |
-| Logs: `[entrypoint] /data/... not found`    | No has subido el `.fitbit-token.json` al volumen. Paso 8.   |
-| Las tools de write devuelven 403            | El token tiene scopes `r*` solamente. OAuth de nuevo y marca **"View and Log"** (no "View only").|
-| Container se reinicia en bucle              | `docker logs` desde el host — probablemente supergateway no arranca. Verifica `MCP_COMMAND` y que `build/index.js` exista en la imagen.|
+| Síntoma                                         | Causa probable                                                              |
+| ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `/health` devuelve 200 pero `/sse` cuelga        | NGINX sin `proxy_buffering off` (paso 5).                                   |
+| `/auth` devuelve 502 "OAuth server unavailable"  | El proceso MCP no arranca el OAuth express server. Logs + `OAUTH_PERSISTENT=true`. |
+| `401 unauthorized` en claude.ai                  | Bearer mal copiado.                                                         |
+| Logs: `MCP_BEARER_TOKEN must be set`             | Falta la env var (paso 3).                                                  |
+| `redirect_uri_mismatch` al hacer OAuth           | `OAUTH_REDIRECT_URI` no coincide con lo registrado en Fitbit dev app.       |
+| Tools de write devuelven 403                     | OAuth concedió `r*` solo, no `w*`. Re-OAuth marcando **"View and Log"**.    |
+| Container reinicia en bucle                      | `docker logs` desde el host. Verifica `MCP_COMMAND` y que `build/index.js` exista. |
+| Cross-token: tu mujer logea en tu Fitbit         | Sesión de navegador compartida durante OAuth. Re-OAuth en pestaña incógnito.|

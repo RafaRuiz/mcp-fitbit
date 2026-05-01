@@ -1,13 +1,21 @@
-// Bearer-auth wrapper around supergateway.
+// Bearer-auth wrapper around supergateway + OAuth passthrough.
 //
 // Layout:
-//   claude.ai ──HTTPS──▶ CapRover NGINX ──HTTP──▶ this proxy (8000) ──▶ supergateway (8001) ──stdio──▶ MCP server
+//   claude.ai ──HTTPS──▶ CapRover NGINX ──HTTP──▶ this proxy (8000)
+//                                                       │
+//                          ┌─── /health ────── (no auth) returns "ok"
+//                          ├─── /auth, /callback ── (no auth) ──▶ MCP OAuth (3000)
+//                          └─── everything else ─── (Bearer) ──▶ supergateway (8001) ──stdio──▶ MCP server
 //
-// Why we exist: the underlying MCP server is single-user stdio. supergateway
-// turns it into SSE; we add (a) Bearer-token auth so the public endpoint isn't
-// open and (b) a /health route CapRover can poll. supergateway is spawned as a
-// child process so this proxy is the only top-level node process — when
-// supergateway dies, we exit and CapRover restarts the container.
+// Why we exist:
+//   1. Bearer-token auth so the public endpoint isn't open.
+//   2. /health for CapRover to poll.
+//   3. /auth + /callback unauthenticated so the user can complete the Fitbit
+//      OAuth flow from any browser (their phone, etc) without needing access
+//      to the host that runs the server.
+//
+// supergateway is spawned as a child so this proxy is the only top-level node
+// process — when supergateway dies we exit and CapRover restarts the container.
 
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
@@ -15,6 +23,7 @@ import { spawn } from 'node:child_process';
 
 const PORT = parseInt(process.env.PORT || '8000', 10);
 const SUPERGATEWAY_PORT = parseInt(process.env.SUPERGATEWAY_PORT || '8001', 10);
+const OAUTH_PORT = parseInt(process.env.OAUTH_PORT || '3000', 10);
 const TOKEN = process.env.MCP_BEARER_TOKEN;
 const MCP_COMMAND = process.env.MCP_COMMAND || 'node /app/build/index.js';
 
@@ -41,24 +50,53 @@ const forward = (sig) => () => {
 process.on('SIGTERM', forward('SIGTERM'));
 process.on('SIGINT', forward('SIGINT'));
 
-// ---- Express + bearer + SSE-friendly proxy --------------------------------
+// ---- Express + auth + SSE-friendly proxy ---------------------------------
 const app = express();
 app.disable('etag');
 app.disable('x-powered-by');
 
-// Health check FIRST, before auth — CapRover needs to poll without a token.
+// Health check — public, no auth required (CapRover polls it).
 app.get('/health', (_req, res) => {
   res.type('text/plain').send('ok');
 });
 
-// Bearer gate. Reject anything else early.
+// OAuth flow — public, no Bearer required. Forwarded to the MCP server's
+// internal OAuth express server (port OAUTH_PORT). The user's browser hits
+// /auth on the public URL → Fitbit consent → /callback on the public URL →
+// token persisted to /data on the volume by the MCP itself.
+const oauthProxy = createProxyMiddleware({
+  target: `http://127.0.0.1:${OAUTH_PORT}`,
+  changeOrigin: true,
+  xfwd: true,
+  on: {
+    error: (err, _req, res) => {
+      console.error('oauth proxy error:', err.message);
+      if (res && !res.headersSent && typeof res.status === 'function') {
+        res
+          .status(502)
+          .type('text/plain')
+          .send(
+            'OAuth server unavailable. Check that OAUTH_PERSISTENT=true and that the MCP process is running.\n'
+          );
+      }
+    },
+  },
+});
+// IMPORTANT: use `app.all` (not `app.use('/path', ...)`) so Express does NOT
+// strip the `/auth` or `/callback` prefix before handing the request to the
+// proxy. The upstream MCP OAuth server registers exact routes at /auth and
+// /callback — without the prefix it would return 404.
+app.all('/auth', oauthProxy);
+app.all('/callback', oauthProxy);
+
+// Bearer gate for everything else. Reject early.
 app.use((req, res, next) => {
   if (req.headers.authorization === `Bearer ${TOKEN}`) return next();
   res.set('WWW-Authenticate', 'Bearer');
   res.status(401).type('text/plain').send('unauthorized\n');
 });
 
-// Mount the proxy at root — supergateway exposes /sse, /message, etc.
+// MCP traffic — supergateway exposes /sse, /message, etc.
 // IMPORTANT: do NOT install body-parsers (express.json/etc) on this path —
 // they consume the request stream and break POSTs to /message.
 app.use(
@@ -86,7 +124,7 @@ app.use(
 
 const server = app.listen(PORT, () => {
   console.log(
-    `auth-proxy listening on :${PORT} → supergateway :${SUPERGATEWAY_PORT}`
+    `auth-proxy listening on :${PORT} → supergateway :${SUPERGATEWAY_PORT}, oauth :${OAUTH_PORT}`
   );
 });
 
