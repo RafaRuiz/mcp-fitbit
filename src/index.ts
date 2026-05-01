@@ -98,14 +98,23 @@ async function main() {
     await server.connect(transport);
     console.error('Fitbit MCP Server connected via stdio.');
 
-    // Check if an access token is available after connection
-    // If not, initiate the OAuth2 authorization flow
+    // Check if an access token is available after connection. If not, start
+    // the OAuth flow now. In persistent mode (typical for server deployments)
+    // we ALSO start the flow even when a token is loaded — this keeps the
+    // /auth and /callback routes available so the user can re-auth at any
+    // time via their browser without restarting the process.
     const token = await getAccessToken();
+    const oauthPersistent = process.env.OAUTH_PERSISTENT === 'true';
     if (!token) {
       console.error(
         'No access token found. Starting Fitbit authorization flow...'
       );
       startAuthorizationFlow(); // Start flow in background, do not await
+    } else if (oauthPersistent) {
+      console.error(
+        'Token loaded; starting auth flow server (persistent mode) so re-auth is possible without restart.'
+      );
+      startAuthorizationFlow();
     } else {
       console.error('Using existing/loaded access token.');
     }

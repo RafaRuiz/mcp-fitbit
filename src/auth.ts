@@ -63,9 +63,24 @@ const fitbitConfig = {
   },
 };
 
-// OAuth2 Redirect URI and local server port
-const REDIRECT_URI = 'http://localhost:3000/callback';
-const PORT = 3000;
+// OAuth2 redirect URI and server port.
+//
+// Defaults preserve the original local-only behaviour. For deployments where
+// the OAuth flow needs to be reachable from a public URL (e.g. so re-auth can
+// happen from a phone instead of the host that runs the server), set:
+//
+//   OAUTH_PORT           — port the OAuth express server listens on (default 3000)
+//   OAUTH_REDIRECT_URI   — full URL Fitbit redirects to after consent. Must
+//                          match a callback URL registered in your Fitbit dev
+//                          app. (default http://localhost:<OAUTH_PORT>/callback)
+//   OAUTH_PERSISTENT     — when "true", the OAuth express server stays up
+//                          across successful auth (otherwise it shuts down
+//                          after the first successful callback, to free the
+//                          local port — fine for desktop, wrong for servers).
+const OAUTH_PORT = parseInt(process.env.OAUTH_PORT || '3000', 10);
+const REDIRECT_URI =
+  process.env.OAUTH_REDIRECT_URI || `http://localhost:${OAUTH_PORT}/callback`;
+const OAUTH_PERSISTENT = process.env.OAUTH_PERSISTENT === 'true';
 
 // --- State Management ---
 // Storage for the access token and token data
@@ -165,8 +180,9 @@ export function startAuthorizationFlow(): void {
     if (!code) {
       console.error('Authorization code missing in callback.');
       res.status(400).send('Error: Authorization code missing.');
-      // Attempt to close the server if it exists
-      if (oauthServer) {
+      // Don't tear down the OAuth server in persistent mode — the user may
+      // simply have hit /callback by mistake and we want them to retry.
+      if (oauthServer && !OAUTH_PERSISTENT) {
         oauthServer.close(() => {
           console.error('OAuth server closed due to missing code.');
         });
@@ -211,8 +227,11 @@ export function startAuthorizationFlow(): void {
         .status(500)
         .send('Error obtaining access token. Check MCP server logs.');
     } finally {
-      // Ensure the temporary server is always shut down after handling the callback
-      if (oauthServer) {
+      // In persistent mode (typical for server deployments) we leave the
+      // server up so the user can re-auth later via /auth without restarting
+      // the process. In default mode (local desktop) we shut it down so the
+      // local port is freed once the one-shot flow completes.
+      if (oauthServer && !OAUTH_PERSISTENT) {
         console.error('Shutting down temporary OAuth server...');
         oauthServer.close(() => {
           console.error('OAuth server closed.');
@@ -222,9 +241,18 @@ export function startAuthorizationFlow(): void {
     }
   });
 
-  // Start the temporary local server
-  oauthServer = app.listen(PORT, async () => {
-    const authUrl = `http://localhost:${PORT}/auth`;
+  // Start the OAuth server. The user-facing /auth URL is the public origin of
+  // REDIRECT_URI when one is configured (so logs show the URL the user should
+  // actually visit from their browser), falling back to localhost otherwise.
+  let publicAuthUrl: string;
+  try {
+    publicAuthUrl = new URL('/auth', new URL(REDIRECT_URI).origin).toString();
+  } catch {
+    publicAuthUrl = `http://localhost:${OAUTH_PORT}/auth`;
+  }
+
+  oauthServer = app.listen(OAUTH_PORT, async () => {
+    const authUrl = publicAuthUrl;
     console.error(
       `--------------------------------------------------------------------`
     );
