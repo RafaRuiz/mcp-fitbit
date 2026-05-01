@@ -1,0 +1,15 @@
+{
+  "name": "mcp-fitbit-auth-proxy",
+  "version": "1.0.0",
+  "description": "Bearer-auth wrapper that proxies SSE traffic to a supergateway-bridged MCP server.",
+  "type": "module",
+  "private": true,
+  "main": "auth-proxy.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.5"
+  }
+}
