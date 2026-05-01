@@ -89,24 +89,38 @@ const oauthProxy = createProxyMiddleware({
 app.all('/auth', oauthProxy);
 app.all('/callback', oauthProxy);
 
-// Bearer gate for everything else.
+// Authenticated SSE sessions. The MCP-over-SSE handshake is two-step:
 //
-// Accepted forms (any one is enough):
+//   1. Client opens `GET /sse` (with auth). supergateway emits an SSE event
+//      `event: endpoint` whose data is a relative URL like
+//      `/message?sessionId=<uuid>`.
+//   2. Client POSTs to `/message?sessionId=<uuid>` for every JSON-RPC call.
+//
+// Step 2 carries the sessionId but NOT the original auth — when claude.ai
+// resolves the relative `/message?sessionId=...` URL against the base
+// (which might have had `?token=...`), the absolute path replaces the
+// query string and the token is dropped.
+//
+// Workaround: when a step-1 request authenticates successfully, we peek
+// at the SSE response to learn the sessionId supergateway generated, and
+// remember it. Step-2 calls are then authorised by sessionId membership.
+const authedSessions = new Set();
+const SESSION_ID_RE = /sessionId=([0-9a-f-]+)/i;
+
+// Bearer gate. Accept the token via:
 //   1. `Authorization: Bearer <MCP_BEARER_TOKEN>` header (preferred)
-//   2. `?token=<MCP_BEARER_TOKEN>` query string parameter
-//
-// (2) exists because claude.ai's BETA "Add custom connector" UI as of writing
-// only supports either no auth or full OAuth — there is nowhere to enter a
-// shared secret. Putting the secret in the URL is less safe than a header
-// (visible in browser history / NGINX access logs if those are enabled), but
-// since the channel is HTTPS the token is encrypted in transit, and for
-// personal/family use this is an acceptable trade-off. If you ever expose
-// access logs, scrub the query string with a custom NGINX log_format.
+//   2. `?token=<MCP_BEARER_TOKEN>` query string (claude.ai BETA connector UI
+//      has no field for custom headers, so the URL itself carries the secret)
+//   3. `?sessionId=<uuid>` whose uuid is in `authedSessions` (subsequent
+//      /message calls within an already-authed SSE session)
 app.use((req, res, next) => {
   const fromHeader = req.headers.authorization === `Bearer ${TOKEN}`;
   const fromQuery =
     typeof req.query.token === 'string' && req.query.token === TOKEN;
-  if (fromHeader || fromQuery) return next();
+  const sessionId =
+    typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+  const fromSession = sessionId !== null && authedSessions.has(sessionId);
+  if (fromHeader || fromQuery || fromSession) return next();
   res.set('WWW-Authenticate', 'Bearer');
   res.status(401).type('text/plain').send('unauthorized\n');
 });
@@ -137,6 +151,30 @@ app.use(
         // Strip our internal Authorization header from the upstream call.
         // supergateway doesn't need it and shouldn't see our shared secret.
         proxyReq.removeHeader('authorization');
+      },
+      proxyRes: (proxyRes, req) => {
+        // For /sse responses, peek at the streamed chunks to learn the
+        // sessionId supergateway emits in the `event: endpoint` data line.
+        // That sessionId then authorises subsequent /message?sessionId=...
+        // POSTs from the same client (see the bearer gate above).
+        //
+        // We attach a 'data' listener WITHOUT consuming the stream — the
+        // default piping to the client continues normally, we just observe.
+        if (!req.url || !req.url.startsWith('/sse')) return;
+        let observed = '';
+        proxyRes.on('data', (chunk) => {
+          if (observed.length > 4096) return; // cap memory
+          observed += chunk.toString('utf8');
+          const match = observed.match(SESSION_ID_RE);
+          if (match) {
+            const id = match[1];
+            if (!authedSessions.has(id)) {
+              authedSessions.add(id);
+              console.log(`[auth-proxy] sse session authed: ${id}`);
+            }
+            observed = ''; // got it, stop accumulating
+          }
+        });
       },
       error: (err, _req, res) => {
         console.error('proxy error:', err.message);
