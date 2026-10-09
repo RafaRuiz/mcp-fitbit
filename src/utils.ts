@@ -1,20 +1,15 @@
 /**
- * Shared utility functions for Fitbit API integration
+ * Shared helpers for MCP tool registration and responses
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import type {
+  ServerNotification,
+  ServerRequest,
+  ToolAnnotations,
+} from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { 
-  HTTP_CONFIG, 
-  ERROR_MESSAGES, 
-  FITBIT_API_VERSIONS,
-  DATE_REGEX,
-  VALIDATION_MESSAGES,
-  TIME_PERIODS,
-  HEART_RATE_DETAIL_LEVELS,
-  type TimePeriod,
-  type HeartRateDetailLevel
-} from './config.js';
 
 // Common response structures for MCP tools
 export type TextContent = { type: 'text'; text: string };
@@ -26,141 +21,8 @@ export type ToolResponseStructure = {
   [key: string]: unknown;
 };
 
-/**
- * Options that customise a single call to {@link makeFitbitRequest}.
- *
- * `skipUserPrefix` is required for endpoints that aren't user-scoped (e.g.
- * `/foods/search.json`, `/foods/units.json`). For all other endpoints the
- * default prefix `/user/-/` is added automatically.
- */
-export interface FitbitRequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  body?: string;
-  contentType?: string;
-  skipUserPrefix?: boolean;
-}
-
-/**
- * Makes a generic request to the Fitbit API.
- * Handles adding the base URL, authorization header, and basic error handling.
- * @param endpoint The specific API endpoint path (e.g., '/body/weight/date/today/30d.json').
- * @param getAccessTokenFn A function that returns the current valid access token or null.
- * @param apiBase The base URL for the API (defaults to v1, can be overridden for different API versions)
- * @param options HTTP method, body, and routing options for write endpoints.
- * @returns A promise resolving to the parsed JSON response (type T) or null if the request fails.
- */
-export async function makeFitbitRequest<T>(
-  endpoint: string,
-  getAccessTokenFn: () => Promise<string | null>,
-  apiBase: string = FITBIT_API_VERSIONS.V1,
-  options: FitbitRequestOptions = {}
-): Promise<T | null> {
-  const {
-    method = 'GET',
-    body,
-    contentType,
-    skipUserPrefix = false,
-  } = options;
-
-  const currentAccessToken = await getAccessTokenFn();
-  if (!currentAccessToken) {
-    console.error(`Error: ${ERROR_MESSAGES.NO_ACCESS_TOKEN}`);
-    return null;
-  }
-
-  // Ensure endpoint starts correctly relative to the user path
-  const cleanEndpoint = endpoint.startsWith('/')
-    ? endpoint.substring(1)
-    : endpoint;
-  // Construct the full URL. Most endpoints are user-scoped (`/user/-/...`),
-  // but a few (e.g. `/foods/search`, `/foods/units`) are not.
-  const url = skipUserPrefix
-    ? `${apiBase}/${cleanEndpoint}`
-    : `${apiBase}/user/-/${cleanEndpoint}`;
-  console.error(`Attempting Fitbit API request: ${method} ${url}`);
-
-  const headers: Record<string, string> = {
-    'User-Agent': HTTP_CONFIG.USER_AGENT,
-    Authorization: `Bearer ${currentAccessToken}`,
-    Accept: 'application/json',
-  };
-  if (body !== undefined) {
-    headers['Content-Type'] = contentType ?? 'application/json';
-  }
-
-  try {
-    const response = await fetch(url, { method, headers, body });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(
-        `Fitbit API Error! Status: ${response.status}, URL: ${url}, Body: ${errorBody}`
-      );
-      if (response.status === 401) {
-        console.error(ERROR_MESSAGES.TOKEN_EXPIRED);
-      }
-      return null;
-    }
-    // Handle potential empty response body for certain success statuses (e.g., 204 No Content)
-    if (response.status === 204) {
-      return {} as T; // Return an empty object or appropriate type for no content
-    }
-    return (await response.json()) as T;
-  } catch (error) {
-    console.error(`Error making Fitbit request to ${url}:`, error);
-    return null;
-  }
-}
-
-// === Parameter Validation Schemas ===
-
-export const CommonSchemas = {
-  period: z
-    .enum(TIME_PERIODS)
-    .describe(VALIDATION_MESSAGES.PERIOD_REQUIRED),
-  
-  startDate: z
-    .string()
-    .regex(DATE_REGEX, VALIDATION_MESSAGES.DATE_FORMAT)
-    .describe(VALIDATION_MESSAGES.START_DATE_REQUIRED),
-  
-  endDate: z
-    .string()
-    .regex(DATE_REGEX, VALIDATION_MESSAGES.DATE_FORMAT)
-    .describe(VALIDATION_MESSAGES.END_DATE_REQUIRED),
-  
-  detailLevel: z
-    .enum(HEART_RATE_DETAIL_LEVELS)
-    .describe(VALIDATION_MESSAGES.DETAIL_LEVEL_REQUIRED),
-  
-  date: z
-    .string()
-    .regex(DATE_REGEX, VALIDATION_MESSAGES.DATE_FORMAT)
-    .describe('The date for which to retrieve data (YYYY-MM-DD)'),
-    
-  afterDate: z
-    .string()
-    .regex(DATE_REGEX, VALIDATION_MESSAGES.DATE_FORMAT)
-    .describe('Retrieve activities after this date (YYYY-MM-DD)'),
-    
-  limit: z
-    .number()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe('Maximum number of items to return (1-100, default: 20)')
-} as const;
-
-// === Common Parameter Types ===
-
-export type CommonParams = {
-  period: TimePeriod;
-  startDate: string;
-  endDate: string;
-  detailLevel: HeartRateDetailLevel;
-  date: string;
-  afterDate: string;
-  limit?: number;
-};
+/** Per-request context the SDK passes to tool handlers (auth info, signal…) */
+export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 // === Tool Response Helpers ===
 
@@ -178,74 +40,50 @@ export function createSuccessResponse(data: unknown): ToolResponseStructure {
   };
 }
 
-export function createNoDataResponse(context: string): ToolResponseStructure {
-  return {
-    content: [{ type: 'text', text: `${ERROR_MESSAGES.NO_DATA_FOUND} ${context}.` }],
-  };
-}
-
 // === Tool Registration Helper ===
 
-export interface ToolConfig {
+export interface ToolConfig<Shape extends z.ZodRawShape> {
   name: string;
   description: string;
-  parametersSchema: Record<string, z.ZodTypeAny>;
-  // Using 'any' here is necessary because different handlers expect different parameter types
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  handler: (params: any) => Promise<ToolResponseStructure>;
+  inputSchema: Shape;
+  annotations?: ToolAnnotations;
+  handler: (
+    params: z.objectOutputType<Shape, z.ZodTypeAny>,
+    extra: ToolExtra
+  ) => Promise<ToolResponseStructure>;
 }
 
-export function registerTool(
+export function registerTool<Shape extends z.ZodRawShape>(
   server: McpServer,
-  config: ToolConfig
+  config: ToolConfig<Shape>
 ): void {
-  server.tool(
+  server.registerTool(
     config.name,
-    config.description,
-    config.parametersSchema,
-    config.handler
+    {
+      description: config.description,
+      inputSchema: config.inputSchema,
+      annotations: config.annotations,
+    },
+    // The SDK infers handler args from the shape; our config is already typed.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    config.handler as any
   );
 }
 
-// === Fitbit-Specific Tool Helpers ===
+export const READ_ONLY_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: true,
+  openWorldHint: true,
+};
 
-export async function handleFitbitApiCall<TResponse, TParams>(
-  endpoint: string,
-  params: TParams,
-  getAccessTokenFn: () => Promise<string | null>,
-  options: {
-    apiBase?: string;
-    successDataExtractor?: (data: TResponse) => unknown[] | null;
-    noDataMessage?: string;
-    errorContext?: string;
-  } = {}
-): Promise<ToolResponseStructure> {
-  const {
-    apiBase = FITBIT_API_VERSIONS.V1,
-    successDataExtractor,
-    noDataMessage,
-    errorContext = JSON.stringify(params)
-  } = options;
+export const WRITE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  openWorldHint: true,
+};
 
-  const responseData = await makeFitbitRequest<TResponse>(
-    endpoint,
-    getAccessTokenFn,
-    apiBase
-  );
-
-  if (!responseData) {
-    return createErrorResponse(
-      `${ERROR_MESSAGES.API_REQUEST_FAILED} for ${errorContext}. ${ERROR_MESSAGES.CHECK_TOKEN_PERMISSIONS}.`
-    );
-  }
-
-  // Check for empty data if extractor provided
-  if (successDataExtractor) {
-    const extractedData = successDataExtractor(responseData);
-    if (!extractedData || extractedData.length === 0) {
-      return createNoDataResponse(noDataMessage || errorContext);
-    }
-  }
-
-  return createSuccessResponse(responseData);
-}
+export const DELETE_ANNOTATIONS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};

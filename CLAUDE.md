@@ -1,14 +1,14 @@
 # Claude Development Guide
 
 ## Project Overview
-MCP server for Fitbit API integration providing health data access (weight, sleep, activities, profile).
+Remote, multi-user MCP server for the **Google Health API v4** (`https://health.googleapis.com/v4`), the successor of the Fitbit Web API (shut down 2026-10-30). Each Claude user adds the connector and signs in with their own Google account via OAuth.
 
-**Design Philosophy:** This MCP server acts as a 1:1 JSON proxy to the Fitbit API. Tools should match the underlying API parameters and limitations exactly, without adding abstraction layers or client-side data manipulation. Return raw JSON responses from Fitbit API calls.
+**Design Philosophy:** This MCP server acts as a 1:1 JSON proxy to the Google Health API. Tools match the API's methods and parameters (list / get / reconcile / rollUp / dailyRollUp / create / patch / batchDelete) without abstraction layers or client-side data manipulation, and return the raw JSON responses. Reads are generic over `dataType`; writes (food and water) have typed parameters because the request bodies are strict.
 
 ## Development Commands
 - `npm run build` - Compile TypeScript to build/ directory
-- `npm run start` - Run the built MCP server
-- `npm run dev` - Build and run with MCP inspector for testing/debugging
+- `npm run start` - Run the built server (HTTP on `PORT`, default 8000)
+- `npm run dev` - Build and start
 - `npm run lint` - Check code quality and style issues
 - `npm run format` - Auto-fix code formatting
 - `npm test` - Run tests with Vitest
@@ -17,70 +17,85 @@ MCP server for Fitbit API integration providing health data access (weight, slee
 ## CI/CD
 - GitHub Actions workflow runs tests, lint checks, and build on push/PR to main branch
 - Located at `.github/workflows/ci.yml`
+- Deployment: Docker image for CapRover, see `docker/README.md`
 
 ## Project Structure
-- `src/index.ts` - Main MCP server entry point, registers all tools
-- `src/auth.ts` - OAuth2 flow with token persistence
-- `src/utils.ts` - Shared Fitbit API request utilities  
-- `src/weight.ts` - Weight data tool (time series)
-- `src/sleep.ts` - Sleep data tool (date range)
-- `src/activities.ts` - Exercise/activity data tool (date range)
-- `src/profile.ts` - User profile tool
-- `src/heart-rate.ts` - Heart rate data tools (time series and date range)
-- `src/nutrition.ts` - Nutrition tools: read (food log, time series, search, units, locales, meals, favorites/recent/frequent) AND write (log_food with full macros/micros, create_food, update/delete food log, log/update/delete water, create/update/delete meals, add/delete favorite foods)
-- `src/daily-activity.ts` - Daily activity summary tool (steps, calories, goals, heart rate zones)
-- `src/activity-goals.ts` - Activity goals tool (daily/weekly goals)
-- `src/activity-timeseries.ts` - Activity time series tool (steps, distance, calories over time)
-- `src/azm-timeseries.ts` - Active Zone Minutes time series tool
+- `src/index.ts` - Entry point: loads config, opens the OAuth store, starts the HTTP app
+- `src/config.ts` - Constants (API base, Google URLs and scopes, allowed redirect URIs) and `loadConfig(env)`
+- `src/server.ts` - Express app: SDK `mcpAuthRouter` (metadata, /register, /authorize, /token, /revoke), `/oauth/google/callback`, bearer-protected stateless Streamable HTTP at `POST /mcp`, `/health`
+- `src/mcp.ts` - `createMcpServer(api)`: new McpServer per request with all tools registered
+- `src/utils.ts` - `registerTool`, response helpers, tool annotations, `ToolExtra` type
+- `src/google/client.ts` - `createHealthApi` (auth header, retries, error pass-through) and `toToolResponse`
+- `src/google/data-types.ts` - Data type enums per operation, meal types, nutrients, volume units
+- `src/google/schemas.ts` - Zod schemas (dates, RFC 3339, durations, data point ids) and request helpers
+- `src/oauth/provider.ts` - `HealthOAuthProvider`: OAuth 2.1 server for MCP clients that delegates sign-in to Google
+- `src/oauth/google.ts` - Google OAuth client (authorize URL, code/refresh exchange, id_token verification, identity) and `GoogleTokenService` (per-user token refresh)
+- `src/oauth/store.ts` - `JsonStore`: clients, hashed MCP refresh tokens and Google tokens in `${DATA_DIR}/store.json`
+- `src/tools/data-points.ts` - list_data_points, get_data_point, reconcile_data_points, daily_rollup, rollup
+- `src/tools/profile.ts` - get_profile, get_settings, get_identity
+- `src/tools/nutrition.ts` - log_food, delete_food_logs
+- `src/tools/hydration.ts` - log_water, update_water_log, delete_water_logs
 - `build/` - Compiled JavaScript output
-- `.env` - Environment variables (FITBIT_CLIENT_ID, FITBIT_CLIENT_SECRET)
+- `.env` - Environment variables (see `.env.example`)
 
 ## Code Conventions
-- TypeScript with ES modules
-- Zod for parameter validation
-- All tools return raw JSON from Fitbit API
-- Error handling with console.error for debugging
-- Use makeFitbitRequest utility for API calls
-- **API Fidelity:** Tool parameters must exactly match Fitbit API requirements - no client-side workarounds or data filtering
-- **No Abstraction:** If Fitbit API only supports `afterDate`, the tool should only accept `afterDate` (not `startDate`/`endDate`)
-- **Documentation First:** Always check the official Fitbit API documentation at https://dev.fitbit.com/build/reference/ when adding new endpoints to ensure proper parameters, authentication scopes, and response formats
-- **CRITICAL: Endpoint URL Construction:** The `makeFitbitRequest` utility automatically adds `/user/-/` to all endpoint paths. When constructing endpoints, DO NOT include `user/-/` in the path - start directly with the resource path (e.g., `foods/log/caloriesIn/date/today/1d.json` NOT `user/-/foods/log/caloriesIn/date/today/1d.json`)
+- TypeScript with ES modules, Node >= 22
+- Zod (v3 API) for parameter validation; register tools with `registerTool` from `src/utils.ts` (wraps `server.registerTool`)
+- Tool handlers receive `(params, extra)` and call `api.call(extra, request)`; never read tokens directly
+- All tools return raw JSON from the Google Health API via `toToolResponse`; API errors are returned with their HTTP status and Google error body
+- Error handling with console.error for debugging (stdout is free now, but keep logs on stderr)
+- **API Fidelity:** Tool parameters must match the Google Health API - no client-side workarounds or data filtering
+- **Documentation First:** Check https://developers.google.com/health/ and the discovery doc (`https://health.googleapis.com/$discovery/rest?version=v4`) when adding endpoints to get parameters, scopes, and response formats right
+- **Paths:** data type paths are kebab-case (`users/me/dataTypes/nutrition-log/dataPoints`); filter fields are snake_case (`nutrition_log.interval.civil_start_time`)
+- **Units:** all nutrient quantities are grams; energy is kcal; volumes are milliliters
+- **UTC offsets** are durations in seconds (`"7200s"` = UTC+2), not `+02:00`
+- **Lint/format globs are quoted** in package.json (`'src/**/*.ts'`) so subdirectories are included
+
+## Authentication Architecture
+- MCP clients (claude.ai, Claude Code, MCP Inspector) discover OAuth via `401` + `WWW-Authenticate: resource_metadata=...`, register with DCR, and use PKCE
+- Allowed DCR redirect URIs: `https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`, and loopback `http://localhost|127.0.0.1:*`
+- `/authorize` redirects to Google (`access_type=offline`, `prompt=consent`); `/oauth/google/callback` verifies the id_token, enforces `ALLOWED_EMAILS`, stores the user's Google refresh token, and redirects back with our own authorization code
+- MCP access tokens (1 h, memory only) carry `extra.userId` (Google `sub`); MCP refresh tokens (90 days, rotated) are persisted hashed
+- `GoogleTokenService` refreshes Google access tokens per user (single in-flight refresh); `invalid_grant` marks the user revoked and the client must reconnect
+- Instance count must be 1 (in-memory codes and access tokens)
 
 ## Testing the Server
-**Development mode (with inspector):**
-1. `npm run dev` - Builds and opens MCP inspector web UI
-2. Test tools interactively at http://localhost:5173
-3. OAuth flow - server opens browser for authorization
+**Local (Claude Code):**
+1. Create `.env` from `.env.example` with `PUBLIC_BASE_URL=http://localhost:8000` and a Google OAuth client whose redirect URIs include `http://localhost:8000/oauth/google/callback`
+2. `npm run build && npm start`
+3. `claude mcp add --transport http health http://localhost:8000/mcp`, then `/mcp` → Authenticate
+4. Or use `npx @modelcontextprotocol/inspector` with transport "Streamable HTTP" and URL `http://localhost:8000/mcp`
 
-**Production mode:**
-1. `npm run build` - Compile TypeScript
-2. `npm run start` - Run server directly
-3. Tools available after auth:
-   - **Read:** get_weight, get_sleep_by_date_range, get_exercises, get_daily_activity_summary, get_activity_goals, get_activity_timeseries, get_azm_timeseries, get_profile, get_heart_rate, get_heart_rate_by_date_range, get_food_log, get_nutrition, get_nutrition_by_date_range, search_foods, get_food, get_food_units, get_food_locales, get_water_log, get_meals, get_meal, get_favorite_foods, get_recent_foods, get_frequent_foods
-   - **Write (nutrition):** log_food, update_food_log, delete_food_log, create_food, delete_custom_food, log_water, update_water_log, delete_water_log, create_meal, update_meal, delete_meal, add_favorite_food, delete_favorite_food
+**Tools available after auth:**
+- **Read:** list_data_points, get_data_point, reconcile_data_points, daily_rollup, rollup, get_profile, get_settings, get_identity
+- **Write:** log_food, delete_food_logs, log_water, update_water_log, delete_water_logs
 
 ## Environment Setup
-Requires `.env` file with:
+Requires `.env` (or container env) with:
 ```
-FITBIT_CLIENT_ID=your_client_id
-FITBIT_CLIENT_SECRET=your_client_secret
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+PUBLIC_BASE_URL=https://health.example.com
+ALLOWED_EMAILS=you@gmail.com,partner@gmail.com
 ```
+Optional: `DATA_DIR`, `PORT`, `TRUST_PROXY`, `GOOGLE_SCOPES`, `HEALTH_API_BASE`, `MCP_ACCESS_TOKEN_TTL_SECONDS`, `MCP_REFRESH_TOKEN_TTL_SECONDS`.
 
 ## API Notes
-- Fitbit API uses different base URLs per endpoint (v1, v1.2)
-- Activities tool has custom request handler due to different URL structure
-- All dates in YYYY-MM-DD format
-- Token persisted to `.fitbit-token.json`
-- OAuth scopes: weight, sleep, profile, activity, heartrate, nutrition
+- Methods: `list` (GET, filter/pageSize/pageToken/dataSourceFamily), `reconcile` (GET), `dailyRollUp` / `rollUp` (POST, body with range), `create` (POST, returns Operation), `patch` (PATCH, full DataPoint), `batchDelete` (POST `{names}`)
+- Filters (AIP-160, `>=` / `<` / `AND`): interval types use `{type}.interval.civil_start_time`, sample types `{type}.sample_time.civil_time`, daily types `{type}.date`, sleep only `sleep.interval.civil_end_time`
+- Page size max 10000 (25 for exercise and sleep); rollup range max 14 days for heart-rate, active-minutes, total-calories, calories-in-heart-rate-zone, 90 days otherwise
+- Nutrition logs from anonymous food (foodDisplayName + values) are not editable: delete and re-create
+- There is no food search, custom food creation, saved meals or favorites in this API
+- Rate limit: 300 requests/minute per user
 
 ## Contributing & Improvements
 
 When working on this codebase:
 1. Follow the existing code style and patterns
-2. Update relevant documentation 
-3. Test changes thoroughly with the MCP inspector
-4. Ensure backward compatibility with existing tools
+2. Update relevant documentation
+3. Test changes with Claude Code or the MCP Inspector against a local server
+4. Keep tool names and parameters stable for connected users
 5. **VERY IMPORTANT:** When you have completed a task, you MUST run both build, test, and lint commands (`npm run build` then `npm run test:coverage` then  `npm run lint`) to ensure your code is correct
 6. Update documentation when making changes
 
-**For identified improvement opportunities, see [TASKS.md](TASKS.md)** - this file contains a comprehensive analysis of refactoring opportunities, code quality improvements, and architectural enhancements prioritized by impact and effort.
+**For identified improvement opportunities, see [TASKS.md](TASKS.md)**

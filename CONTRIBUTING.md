@@ -1,32 +1,28 @@
 # Contributing to MCP Fitbit Server
 
-Thank you for your interest in contributing to the MCP Fitbit Server! This project acts as a 1:1 JSON proxy to the Fitbit API, providing AI assistants with access to health data.
+Thank you for your interest in contributing to the MCP Fitbit Server! This project acts as a 1:1 JSON proxy to the Google Health API (the successor of the Fitbit Web API), providing AI assistants with access to health data through a remote, multi-user MCP connector.
 
 ## 🎯 Project Philosophy
 
 This MCP server is designed to be:
-- **Simple and focused** - Direct proxy to Fitbit API without abstraction layers
-- **Local development tool** - Not intended as a production service
+- **Simple and focused** - Direct proxy to the Google Health API without abstraction layers
+- **Small remote service** - One container serving a handful of allowed Google accounts
 - **Minimal complexity** - Easy to understand and maintain
-- **API faithful** - Tools match Fitbit API parameters exactly
+- **API faithful** - Tools match Google Health API methods and parameters exactly
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 18+ 
+- Node.js 22+
 - NPM
-- Fitbit Developer Account ([dev.fitbit.com](https://dev.fitbit.com))
+- A Google Cloud project with the Google Health API enabled and an OAuth client of type *Web application*
 
 ### Setup
 1. Fork and clone the repository
 2. Install dependencies: `npm install`
-3. Create `.env` file with your Fitbit app credentials:
-   ```
-   FITBIT_CLIENT_ID=your_client_id
-   FITBIT_CLIENT_SECRET=your_client_secret
-   ```
-4. Build the project: `npm run build`
-5. Test with MCP inspector: `npm run dev`
+3. Copy `.env.example` to `.env` and fill in `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL=http://localhost:8000` and `ALLOWED_EMAILS`
+4. Build and start: `npm run dev`
+5. Connect a client: `claude mcp add --transport http health http://localhost:8000/mcp` (or the MCP Inspector with Streamable HTTP)
 
 ## 📝 Development Workflow
 
@@ -39,7 +35,7 @@ This MCP server is designed to be:
    npm run test:coverage
    npm run lint
    ```
-4. Test your changes with the MCP inspector (`npm run dev`)
+4. Test your changes against a local server with Claude Code or the MCP Inspector
 5. Create a pull request
 
 ### Code Conventions
@@ -50,10 +46,10 @@ This MCP server is designed to be:
 - Prefer explicit types over `any`
 
 **API Integration:**
-- **Critical:** `makeFitbitRequest` automatically adds `/user/-/` - don't include it in endpoint paths
-- Tool parameters must exactly match Fitbit API requirements
-- Return raw JSON from Fitbit API calls - no client-side data manipulation
-- Check [Fitbit API docs](https://dev.fitbit.com/build/reference/) for proper endpoints
+- Call the API through `api.call(extra, request)` (`src/google/client.ts`); paths start with `/users/me/...`
+- Tool parameters must exactly match Google Health API requirements
+- Return raw JSON via `toToolResponse` - no client-side data manipulation
+- Check the [Google Health API docs](https://developers.google.com/health/) and the discovery document for endpoints, scopes and fields
 
 **Error Handling:**
 - Use `console.error` for debugging information
@@ -63,7 +59,7 @@ This MCP server is designed to be:
 **Testing:**
 - Write unit tests for all new tools using Vitest
 - Follow the pattern in existing `*.test.ts` files
-- Mock `utils.js` functions (`registerTool`, `handleFitbitApiCall`)
+- Use a fake server (`{ registerTool: vi.fn() }`) and a fake `HealthApi` (`{ call: vi.fn() }`), then assert the request each handler builds
 - Test tool registration, handler logic, error cases, and parameter validation
 
 ## 🧪 Testing
@@ -77,44 +73,42 @@ npm run test:ui          # Run tests with interactive UI
 
 We aim for 80%+ test coverage. New features should include comprehensive tests.
 
-## 🔍 Adding New Fitbit Endpoints
+## 🔍 Adding New Google Health Endpoints
 
-When adding new Fitbit API endpoints:
+Most data types are already reachable through the generic tools (`list_data_points`, `reconcile_data_points`, `daily_rollup`, `rollup`, `get_data_point`). To expose a new data type, add it to the right list in `src/google/data-types.ts`. New tools are only needed for new write operations or new non-dataPoints methods:
 
-1. **Research the API first:** Check [Fitbit API documentation](https://dev.fitbit.com/build/reference/)
-2. **Create the tool file:** Follow the pattern in existing tools (`src/weight.ts`, `src/sleep.ts`, etc.)
-3. **Parameter validation:** Use Zod schemas that match Fitbit API exactly
-4. **Endpoint construction:** Remember `makeFitbitRequest` adds `/user/-/` automatically
-5. **Register the tool:** Add to `src/index.ts`
-6. **Write tests:** Create corresponding `*.test.ts` file
-7. **Update documentation:** Add tool description to README.md
+1. **Research the API first:** [Google Health API docs](https://developers.google.com/health/) and `https://health.googleapis.com/$discovery/rest?version=v4`
+2. **Create or extend a tool module** in `src/tools/`
+3. **Parameter validation:** Zod schemas matching the API fields (reuse `src/google/schemas.ts`)
+4. **Register the module** in `src/mcp.ts`, and add any new scope to `DEFAULT_GOOGLE_SCOPES` in `src/config.ts`
+5. **Write tests:** a corresponding `*.test.ts` file
+6. **Update documentation:** README.md and CLAUDE.md
 
 ### Example Tool Structure:
 ```typescript
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { registerTool, handleFitbitApiCall } from './utils.js';
+import { type HealthApi, toToolResponse } from '../google/client.js';
+import { dataTypePath } from '../google/schemas.js';
+import { READ_ONLY_ANNOTATIONS, registerTool } from '../utils.js';
 
-const GetDataSchema = z.object({
-  date: z.string().describe('Date in YYYY-MM-DD format'),
-  period: z.enum(['1d', '7d', '30d']).optional()
-});
-
-registerTool({
-  name: 'get_data',
-  description: 'Get data from Fitbit API',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
-      period: { type: 'string', enum: ['1d', '7d', '30d'] }
+export function registerExampleTools(server: McpServer, api: HealthApi) {
+  registerTool(server, {
+    name: 'list_weight',
+    description: 'List weight data points (GET users/me/dataTypes/weight/dataPoints)',
+    inputSchema: {
+      filter: z.string().optional().describe('AIP-160 filter'),
     },
-    required: ['date']
-  }
-}, async (args) => {
-  const { date, period = '1d' } = GetDataSchema.parse(args);
-  const endpoint = `data/date/${date}/${period}.json`;
-  return handleFitbitApiCall(endpoint);
-});
+    annotations: READ_ONLY_ANNOTATIONS,
+    handler: async ({ filter }, extra) =>
+      toToolResponse(
+        await api.call(extra, {
+          path: dataTypePath('weight'),
+          query: { filter },
+        })
+      ),
+  });
+}
 ```
 
 ## 📚 Documentation
@@ -138,7 +132,7 @@ For new features:
 - Check existing issues first
 - Explain the use case and benefit
 - Consider if it fits the project's simple, focused philosophy
-- Reference specific Fitbit API endpoints when applicable
+- Reference specific Google Health API methods and data types when applicable
 
 ## 📋 Pull Request Guidelines
 
@@ -153,7 +147,7 @@ For new features:
 ```powershell
 npm run build         # Compile TypeScript
 npm run start         # Run the built server
-npm run dev           # Build and run with MCP inspector
+npm run dev           # Build and start the server
 npm run lint          # Check code quality
 npm run lint:fix      # Auto-fix linting issues
 npm run format        # Format code with Prettier

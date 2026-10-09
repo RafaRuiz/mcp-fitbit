@@ -1,74 +1,159 @@
 /**
- * Centralized configuration for the MCP Fitbit server
- * Contains all constants, API URLs, and shared configurations
+ * Centralized configuration for the Google Health MCP server.
+ * Contains API URLs, OAuth scopes, and the runtime configuration loader.
  */
 
 // === API Configuration ===
 
-export const FITBIT_API_VERSIONS = {
-  V1: 'https://api.fitbit.com/1',
-  V1_2: 'https://api.fitbit.com/1.2',
+export const HEALTH_API_BASE = 'https://health.googleapis.com/v4';
+
+export const GOOGLE_OAUTH_CONFIG = {
+  AUTHORIZE_URL: 'https://accounts.google.com/o/oauth2/v2/auth',
+  TOKEN_URL: 'https://oauth2.googleapis.com/token',
+  JWKS_URL: 'https://www.googleapis.com/oauth2/v3/certs',
+  ISSUERS: ['https://accounts.google.com', 'accounts.google.com'],
 } as const;
 
-export const FITBIT_OAUTH_CONFIG = {
-  AUTHORIZE_URL: 'https://www.fitbit.com/oauth2/authorize',
-  TOKEN_URL: 'https://api.fitbit.com/oauth2/token',
-  CALLBACK_URI: 'http://localhost:3000/callback',
-  SCOPES: [
-    'weight',
-    'sleep', 
-    'profile',
-    'activity',
-    'heartrate',
-    'nutrition'
-  ].join(' ')
-} as const;
+const GOOGLE_HEALTH_SCOPE_PREFIX =
+  'https://www.googleapis.com/auth/googlehealth';
 
-// === Tool Configuration ===
+/**
+ * Google scopes requested when a user connects. `openid email` identify the
+ * Google account (checked against ALLOWED_EMAILS); the googlehealth scopes
+ * cover every data type exposed by the tools. Override with GOOGLE_SCOPES.
+ */
+export const DEFAULT_GOOGLE_SCOPES = [
+  'openid',
+  'email',
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.activity_and_fitness.readonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.health_metrics_and_measurements.readonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.sleep.readonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.nutrition.readonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.nutrition.writeonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.profile.readonly`,
+  `${GOOGLE_HEALTH_SCOPE_PREFIX}.settings.readonly`,
+] as const;
 
-// === Common Parameter Types ===
+/** Scope this server issues on its own (MCP) access tokens. */
+export const MCP_SCOPES = ['health'];
 
-export const TIME_PERIODS = ['1d', '7d', '30d', '3m', '6m', '1y'] as const;
-export type TimePeriod = typeof TIME_PERIODS[number];
-
-export const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-export const DATE_FORMAT_ERROR = 'Date must be in YYYY-MM-DD format';
-
-export const HEART_RATE_DETAIL_LEVELS = ['1sec', '1min', '15min'] as const;
-export type HeartRateDetailLevel = typeof HEART_RATE_DETAIL_LEVELS[number];
-
-// === Common Validation Messages ===
-
-export const VALIDATION_MESSAGES = {
-  DATE_FORMAT: DATE_FORMAT_ERROR,
-  PERIOD_REQUIRED: 'The time period for which to retrieve data',
-  START_DATE_REQUIRED: 'The start date for which to retrieve data (YYYY-MM-DD)',
-  END_DATE_REQUIRED: 'The end date for which to retrieve data (YYYY-MM-DD)',
-  DETAIL_LEVEL_REQUIRED: 'The granularity level of the data',
-  MAX_RANGE_100_DAYS: 'Note: The API enforces a maximum range of 100 days',
-  MAX_RANGE_31_DAYS: 'Note: The API enforces a maximum range of 31 days'
-} as const;
+/**
+ * Redirect URIs a client may register through dynamic client registration.
+ * claude.ai (web, desktop and mobile) uses the claude.ai callback; loopback
+ * redirects (any port) are allowed for Claude Code and the MCP Inspector.
+ */
+export const ALLOWED_REMOTE_REDIRECT_URIS = [
+  'https://claude.ai/api/mcp/auth_callback',
+  'https://claude.com/api/mcp/auth_callback',
+];
+export const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 // === HTTP Configuration ===
 
 export const HTTP_CONFIG = {
-  USER_AGENT: 'mcp-fitbit-server/1.0',
+  USER_AGENT: 'mcp-google-health/2.0',
   TIMEOUT_MS: 30000,
-  MAX_RETRIES: 3
+  MAX_RETRIES: 3,
 } as const;
 
-// === File Paths ===
+// === Runtime Configuration ===
 
-export const FILE_PATHS = {
-  TOKEN_STORAGE: '.fitbit-token.json'
-} as const;
+export interface AppConfig {
+  googleClientId: string;
+  googleClientSecret: string;
+  googleScopes: string[];
+  /** Public HTTPS origin of this server, e.g. https://health.example.com */
+  publicBaseUrl: URL;
+  /** Canonical MCP endpoint (resource identifier): `${publicBaseUrl}/mcp` */
+  mcpUrl: URL;
+  /** Google redirect URI: `${publicBaseUrl}/oauth/google/callback` */
+  googleRedirectUri: string;
+  /** Lower-cased Google account emails allowed to connect */
+  allowedEmails: string[];
+  dataDir: string;
+  port: number;
+  /** Value for express `trust proxy` (number of proxy hops) */
+  trustProxy: number;
+  healthApiBase: string;
+  accessTokenTtlSeconds: number;
+  refreshTokenTtlSeconds: number;
+}
 
-// === Error Messages ===
+const REQUIRED_ENV_VARS = [
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'PUBLIC_BASE_URL',
+  'ALLOWED_EMAILS',
+] as const;
 
-export const ERROR_MESSAGES = {
-  NO_ACCESS_TOKEN: 'No Fitbit Access Token available. Please authorize first.',
-  API_REQUEST_FAILED: 'Failed to retrieve data from Fitbit API',
-  TOKEN_EXPIRED: 'Access token might be expired or invalid. Re-authorization may be needed.',
-  NO_DATA_FOUND: 'No data found for the specified period/range',
-  CHECK_TOKEN_PERMISSIONS: 'Check token and permissions'
-} as const;
+function parseInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string
+): number {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+/**
+ * Builds the runtime configuration from environment variables.
+ * Throws a descriptive error when required variables are missing or invalid.
+ */
+export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
+  const missing = REQUIRED_ENV_VARS.filter((name) => !env[name]?.trim());
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}`
+    );
+  }
+
+  let publicBaseUrl: URL;
+  try {
+    publicBaseUrl = new URL(env.PUBLIC_BASE_URL!.trim().replace(/\/+$/, ''));
+  } catch {
+    throw new Error('PUBLIC_BASE_URL must be an absolute URL');
+  }
+  const base = publicBaseUrl.href.replace(/\/+$/, '');
+
+  const allowedEmails = env
+    .ALLOWED_EMAILS!.split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowedEmails.length === 0) {
+    throw new Error('ALLOWED_EMAILS must contain at least one email');
+  }
+
+  const googleScopes = env.GOOGLE_SCOPES?.trim()
+    ? env.GOOGLE_SCOPES.trim().split(/\s+/)
+    : [...DEFAULT_GOOGLE_SCOPES];
+
+  return {
+    googleClientId: env.GOOGLE_CLIENT_ID!.trim(),
+    googleClientSecret: env.GOOGLE_CLIENT_SECRET!.trim(),
+    googleScopes,
+    publicBaseUrl,
+    mcpUrl: new URL(`${base}/mcp`),
+    googleRedirectUri: `${base}/oauth/google/callback`,
+    allowedEmails,
+    dataDir: env.DATA_DIR?.trim() || './data',
+    port: parseInteger(env.PORT, 8000, 'PORT'),
+    trustProxy: parseInteger(env.TRUST_PROXY, 1, 'TRUST_PROXY'),
+    healthApiBase: env.HEALTH_API_BASE?.trim() || HEALTH_API_BASE,
+    accessTokenTtlSeconds: parseInteger(
+      env.MCP_ACCESS_TOKEN_TTL_SECONDS,
+      3600,
+      'MCP_ACCESS_TOKEN_TTL_SECONDS'
+    ),
+    refreshTokenTtlSeconds: parseInteger(
+      env.MCP_REFRESH_TOKEN_TTL_SECONDS,
+      90 * 24 * 3600,
+      'MCP_REFRESH_TOKEN_TTL_SECONDS'
+    ),
+  };
+}

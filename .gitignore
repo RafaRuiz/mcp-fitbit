@@ -6,3 +6,5 @@ build
 .claude
 coverage
 *.tgz
+# OAuth store (local development)
+data/

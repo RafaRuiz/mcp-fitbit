@@ -1,6 +1,6 @@
 {
   "name": "mcp-fitbit",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "type": "module",
   "main": "./build/index.js",
   "bin": {
@@ -20,47 +20,45 @@
     "test:coverage": "vitest run --coverage",
     "build": "tsc",
     "start": "node build/index.js",
-    "dev": "npm run build && npx @modelcontextprotocol/inspector node build/index.js",
-    "lint": "eslint src/**/*.ts --ignore-pattern src/**/*.test.ts",
-    "lint:fix": "eslint src/**/*.ts --fix",
-    "format": "prettier --write src/**/*.ts",
-    "format:check": "prettier --check src/**/*.ts",
+    "dev": "npm run build && npm run start",
+    "lint": "eslint 'src/**/*.ts' --ignore-pattern 'src/**/*.test.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' --fix",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'",
     "prepublishOnly": "npm run build && npm run test && npm run lint",
     "prepack": "npm run build"
   },
   "keywords": [
     "mcp",
+    "google-health",
+    "google-health-api",
     "fitbit",
-    "fitbit-api",
     "mcp-server",
     "claude",
     "model-context-protocol",
     "health-data",
-    "fitness-tracking",
-    "ai-assistant",
+    "nutrition",
     "typescript"
   ],
   "author": "Russell \"TheDigitalNinja\" Perkins",
   "license": "MIT",
-  "description": "Model Context Protocol (MCP) server for accessing Fitbit health and fitness data. Connect AI assistants like Claude to your Fitbit data for personalized health insights.",
+  "description": "Remote MCP server for the Google Health API (Fitbit data): multi-user OAuth connector for Claude with read access to health data and food/water logging.",
   "files": [
     "build/",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.11.0",
-    "@types/express": "^5.0.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "dotenv": "^16.5.0",
-    "express": "^5.1.0",
-    "open": "^10.1.2",
-    "simple-oauth2": "^5.1.0",
-    "zod": "^3.24.3"
+    "express": "^5.2.1",
+    "jose": "^6.2.12",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.15.3",
-    "@types/simple-oauth2": "^5.0.7",
     "@typescript-eslint/eslint-plugin": "^8.32.1",
     "@typescript-eslint/parser": "^8.32.1",
     "@vitest/coverage-v8": "^3.1.4",
@@ -69,5 +67,8 @@
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

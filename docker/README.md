@@ -1,206 +1,175 @@
-# Despliegue en CapRover (rama `deploy`)
+# Despliegue en CapRover
 
-Esta rama añade lo necesario para correr `mcp-fitbit` como **Remote MCP**
-detrás de Bearer auth, encima de [supergateway](https://github.com/supercorp-ai/supergateway)
-(que convierte el transporte stdio del MCP en SSE). La rama `main` se mantiene
-limpia para la PR upstream de las nuevas tools de nutrición.
+El servidor es un **Remote MCP** multiusuario sobre la **Google Health API**
+(la sucesora de la Fitbit Web API, que se apaga el 30-10-2026). Una sola app
+sirve a todas las personas autorizadas: cada una añade el conector en **su**
+Claude, inicia sesión con **su** cuenta de Google y solo ve **sus** datos.
 
 ```
-claude.ai (web/móvil) ──HTTPS──▶ CapRover NGINX ──HTTP──▶ auth-proxy (8000)
-                                                              │
-                                       ┌── /health ──────── (sin auth) ──▶ ok
-                                       ├── /auth, /callback ─ (sin auth) ──▶ MCP OAuth (3000)
-                                       └── /sse, /message ─── (Bearer)  ──▶ supergateway (8001) ──▶ MCP stdio
+claude.ai (web/móvil) ──HTTPS──▶ CapRover NGINX ──HTTP──▶ node build/index.js (8000)
+                                                            │
+   /health ─────────────────────────── (sin auth) ──────────┤ ok
+   /.well-known/oauth-*, /register,                         │
+   /authorize, /token, /revoke ─────── OAuth 2.1 (SDK MCP) ─┤
+   /oauth/google/callback ──────────── vuelta de Google ────┤
+   POST /mcp ──────────────────────── Bearer (token MCP) ───┘ Streamable HTTP sin estado
 ```
 
-**Sin SSH ni SCP**: el usuario hace OAuth desde cualquier navegador (móvil,
-portátil, lo que sea) visitando `https://tu-app.tudominio.com/auth`.
+**Cómo funciona el login.** El servidor es su propio servidor OAuth y
+delega el inicio de sesión en Google:
 
-## Arquitectura para 2 personas
-
-Una sola imagen Docker, **dos apps en CapRover** completamente aisladas:
-
-| App                | Volumen `/data`         | Bearer secret  | Endpoint                                  | Quién lo usa            |
-| ------------------ | ----------------------- | -------------- | ----------------------------------------- | ----------------------- |
-| `mcp-fitbit-rafa`  | tu `.fitbit-token.json` | el tuyo        | `https://fitbit-rafa.tudominio.com/sse`   | Tu Claude (web + móvil) |
-| `mcp-fitbit-paula` | el suyo                 | el suyo        | `https://fitbit-paula.tudominio.com/sse`  | El Claude de tu mujer   |
-
-Cada Claude (el tuyo y el de ella) añade **su** Remote MCP Connector apuntando
-a **su** endpoint con **su** Bearer.
+1. Claude se registra solo (DCR) y abre `/authorize`.
+2. El servidor manda a Google, la persona inicia sesión y da su consentimiento.
+3. Google vuelve a `/oauth/google/callback`.
+4. El servidor comprueba que el email esté en `ALLOWED_EMAILS`, guarda el
+   refresh token de Google de esa persona y devuelve a Claude un código propio.
+5. Claude obtiene tokens MCP propios (1 h, con refresh). Los tokens de Google
+   nunca salen del servidor.
 
 ## Pre-requisitos
 
-1. CapRover funcionando con Let's Encrypt activo en el wildcard.
-2. Una app de desarrollador en [dev.fitbit.com](https://dev.fitbit.com) con
-   **OAuth 2.0 Application Type = Personal**, y en **Callback URL** añadidas
-   las URLs públicas que vayas a usar (Fitbit acepta varias separadas por coma):
-   ```
-   https://fitbit-rafa.tudominio.com/callback,https://fitbit-paula.tudominio.com/callback,http://localhost:3000/callback
-   ```
-   Mantén la de `localhost:3000` por si quieres correrlo en local algún día.
-3. Tu fork de `mcp-fitbit` en GitHub con la rama `deploy` pusheada.
+1. CapRover funcionando con Let's Encrypt.
+2. **Google Cloud**: un proyecto **dedicado** (el actual es `mcp-google-health`,
+   ID `rafaruiz-health-mcp`), con la *Google Health API* activada. Tiene que ser
+   dedicado porque la pantalla de consentimiento, los test users y el estado de
+   publicación son comunes a todo el proyecto: publicarlo afectaría a cualquier
+   otro conector que lo comparta.
+   - **Branding**: nombre de la app, email de soporte, *Application home page*
+     `https://<host>/` y *privacy policy* `https://<host>/privacy`. El servidor
+     sirve las dos páginas, y Google no deja publicar sin ellas.
+   - **Clients → Create client → Web application**. En **Authorized redirect
+     URIs** pon `https://<host>/oauth/google/callback`. Si quieres probar en
+     local, añade también `http://localhost:8000/oauth/google/callback`.
+   - **Google Auth Platform → Data access → Add or remove scopes**:
+     - `openid`
+     - `email`
+     - `.../auth/googlehealth.activity_and_fitness.readonly`
+     - `.../auth/googlehealth.health_metrics_and_measurements.readonly`
+     - `.../auth/googlehealth.sleep.readonly`
+     - `.../auth/googlehealth.nutrition.readonly`
+     - `.../auth/googlehealth.nutrition.writeonly`
+     - `.../auth/googlehealth.profile.readonly`
+     - `.../auth/googlehealth.settings.readonly`
 
-> Las dos apps pueden compartir las mismas Fitbit `CLIENT_ID/SECRET` — Fitbit
-> distingue usuarios por el access token, no por el client. Si prefieres
-> aislar por completo, cada persona puede tener su propia Fitbit dev app.
+     > Si el selector no ofrece alguno (p. ej. `nutrition.readonly`), quítalo
+     > también del servidor con la variable `GOOGLE_SCOPES`. Si Google recibe
+     > un scope que no existe, rechaza el login entero (`invalid_scope`).
+   - **Audience**: *External*. Añade a cada persona como **Test user**.
+     Mientras la app esté en *Testing*, **los refresh tokens de Google caducan
+     a los 7 días** y toca reconectar el conector cada semana. Para evitarlo,
+     **Publish app** (*In production*, sin verificar, hasta 100 usuarios): al
+     conectar saldrá el aviso de "app no verificada" y hay que pulsar
+     *Continuar*. Después de publicar, reconectad para obtener tokens sin esa
+     caducidad.
+3. **Cada persona** tiene que haber entrado al menos una vez en la **app
+   Google Health** del móvil con su cuenta de Google y haber terminado la
+   migración desde Fitbit. Si no, el login se para en una página que lo explica.
 
-## Pasos por instancia (repetir para cada persona)
+## Pasos en CapRover
 
-### 1. Crear la app en CapRover
+### 1. Crear la app
 
-1. **Apps → Create New App** → nombre `mcp-fitbit-<persona>` (ej. `mcp-fitbit-rafa`).
-2. Marcar **"Has Persistent Data"** ANTES de crear (no se puede activar después).
+1. **Apps → Create New App**, por ejemplo `mcp-health`.
+2. Marca **"Has Persistent Data"** antes de crearla; después no se puede activar.
 
-### 2. Configurar deploy desde GitHub
+### 2. Deploy desde GitHub
 
-1. **App Configs → Deployment → Method 3: Deploy from Github/Bitbucket/Gitlab**.
-2. Repo: `https://github.com/<tu-usuario>/mcp-fitbit`
-3. Branch: `deploy`
-4. Username + Personal Access Token (si el repo es privado).
-5. Copia el **Webhook URL** y pégalo en GitHub → Settings → Webhooks (sólo si
-   quieres auto-deploy en cada push).
-6. **"Force Build"** para arrancar la primera build manualmente.
+1. **App Configs → Deployment → Deploy from Github/Bitbucket/Gitlab**.
+2. Repo: `https://github.com/<tu-usuario>/mcp-fitbit`. Rama: la que despliegues
+   (`deploy`).
+3. Si quieres auto-deploy, pega el webhook en GitHub. Si no, usa **Force Build**.
 
 ### 3. Variables de entorno
 
 **App Configs → Environmental Variables**:
 
 ```
-FITBIT_CLIENT_ID=<tu Fitbit dev client id>
-FITBIT_CLIENT_SECRET=<tu Fitbit dev client secret>
-MCP_BEARER_TOKEN=<openssl rand -hex 32>
-OAUTH_REDIRECT_URI=https://fitbit-<persona>.tudominio.com/callback
+GOOGLE_CLIENT_ID=<client id del OAuth client Web>
+GOOGLE_CLIENT_SECRET=<client secret>
+PUBLIC_BASE_URL=https://<host>
+ALLOWED_EMAILS=tu@gmail.com,ella@gmail.com
 ```
 
-> El `OAUTH_REDIRECT_URI` debe coincidir EXACTAMENTE con una de las callback
-> URLs registradas en tu Fitbit dev app.
+`PUBLIC_BASE_URL` tiene que ser la URL pública **https** exacta: se usa como
+issuer OAuth, para el `resource` del MCP (`${PUBLIC_BASE_URL}/mcp`) y para el
+redirect de Google.
 
 ### 4. Volumen persistente
 
-**App Configs → Persistent Directories** → Add:
+**App Configs → Persistent Directories**:
 
-| Path in App | Label                       |
-| ----------- | --------------------------- |
-| `/data`     | `mcp-fitbit-<persona>-data` |
+| Path in App | Label             |
+| ----------- | ----------------- |
+| `/data`     | `mcp-health-data` |
 
-Sin esto, el `.fitbit-token.json` se pierde en cada redeploy.
+Ahí vive `store.json` (modo 600), con los clientes registrados, los refresh
+tokens MCP (hasheados) y los tokens de Google de cada persona. Sin volumen,
+cada redeploy obliga a reconectar.
 
-### 5. NGINX: imprescindible para SSE
+### 5. HTTP
 
-**App Configs → HTTP Settings** → activar:
+**App Configs → HTTP Settings**: activa **Enable HTTPS** y **Force HTTPS**.
+Container HTTP Port: `8000`.
 
-- ✅ **Enable HTTPS**
-- ✅ **Force HTTPS by redirecting all HTTP traffic to HTTPS**
-- ✅ **Websocket Support**
+No hace falta ninguna configuración especial de NGINX: el endpoint `/mcp`
+responde JSON normal, sin streams SSE largos.
 
-Y en **Custom Nginx Config**, sustituir el bloque `location /` por:
+### 6. Una sola réplica
 
-```nginx
-location / {
-    proxy_pass http://$$cap_appname$$:$$cap_application_port$$;
-    proxy_http_version 1.1;
+**Instance Count = 1**. Los códigos de autorización y los access tokens MCP
+viven en memoria del proceso. Tras un reinicio, Claude refresca solo con su
+refresh token, que está persistido.
 
-    # SSE: streams sin buffer ni cache.
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_set_header X-Accel-Buffering no;
+### 7. Conectar en claude.ai (cada persona en su cuenta)
 
-    # Conexión larga (sesión MCP).
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
+1. Si tenías el conector antiguo (`.../sse` con Bearer), **elimínalo**.
+2. **Settings → Connectors → Add custom connector**.
+3. **URL**: `https://<host>/mcp`. Deja vacíos el client ID y el secret de
+   *Advanced settings*: Claude se registra solo.
+4. **Connect**, inicia sesión con **tu** cuenta de Google y acepta los permisos.
+   Marca todas las casillas: si desmarcas alguna, esas herramientas darán 403.
+5. En el móvil aparece solo.
 
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
+> Si los dos conectáis desde el mismo navegador, cuidado con arrastrar la
+> sesión de Google de la otra persona. Usa una ventana de incógnito o el
+> selector de cuentas de Google.
 
-    # Websocket / SSE upgrade headers.
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-}
-```
+## Operativa
 
-Sin `proxy_buffering off`, NGINX retiene los chunks SSE hasta llenar el buffer
-y claude.ai parece colgarse.
+- **Tokens**: el servidor refresca los de Google cuando hace falta y Claude
+  refresca los suyos cada hora. No hay que tocar nada.
+- **"Reconnect the connector"** en una respuesta significa que Google revocó o
+  caducó la autorización (por ejemplo, app en *Testing* tras 7 días).
+  Soluciónalo en Claude → Connectors → reconectar.
+- **Añadir a alguien**: añádelo a `ALLOWED_EMAILS` y como test user en Google,
+  y que añada el conector en su Claude.
+- **Actualizar código**: push a la rama desplegada y **Force Build** (o webhook).
 
-### 6. Una réplica, no más
+## Variables de entorno: referencia
 
-**App Configs → Instance Count** = `1`. Si subes a 2+, dos containers podrían
-refrescar el access token a la vez y perder rotaciones del refresh token. Para
-uso personal, una réplica sobra.
-
-### 7. OAuth — desde cualquier navegador
-
-Una vez deployada la app y verde el `/health`:
-
-1. La persona (en su móvil o portátil, donde sea) abre:
-   ```
-   https://fitbit-<persona>.tudominio.com/auth
-   ```
-2. Redirige a Fitbit. **Logear con la cuenta de Fitbit que toca** (cuidado si
-   compartís navegador — cerrar sesión de Fitbit primero si hace falta).
-3. Pantalla de consent: en cada categoría que aparezca (Nutrition, Activity,
-   Sleep, Weight, Heart Rate), seleccionar **"View and Log"** (NO "View
-   only"), si no las tools de write devolverán 403.
-4. Redirige a `https://fitbit-<persona>.tudominio.com/callback?code=...`.
-5. Mensaje "Authorization successful! You can close this window."
-6. El `.fitbit-token.json` queda guardado en el volumen `/data` de la app.
-
-Repetir lo mismo para la otra persona en su URL.
-
-> **Heads-up sobre sesiones de navegador**: si los dos vais a OAuth en el
-> mismo navegador (mismo equipo, misma cuenta de macOS), podéis arrastrar la
-> sesión de Fitbit del primer flow al segundo y autorizar con la cuenta
-> equivocada. Para evitarlo: pestaña incógnito para el segundo flow, o cerrar
-> sesión de fitbit.com entre uno y otro.
-
-### 8. Añadir el Remote MCP Connector en claude.ai
-
-claude.ai → **Settings → Connectors → Add custom connector**:
-
-- **URL**: `https://fitbit-<persona>.tudominio.com/sse`
-- **Authentication**: `Bearer <MCP_BEARER_TOKEN>` (el del paso 3)
-
-Tu mujer hace lo mismo en SU cuenta de Claude con SU URL y SU bearer. El móvil
-ya lo ve automáticamente.
-
-## Operativa diaria
-
-- **Token refresh**: el container lo hace solo (refresh tokens duran meses).
-  No hay que tocar nada.
-- **Cuando algo se rompa** (refresh token caducó, scopes cambian, lo que sea):
-  visitar `/auth` desde cualquier navegador y rehacer el OAuth. Sin SSH.
-- **Actualizar código** (nuevas tools, fixes en `main`):
-  ```bash
-  git checkout deploy
-  git merge main
-  git push origin deploy
-  ```
-  CapRover detecta el push y rebuilds (si tienes el webhook). Si no, **Force
-  Build** desde la UI.
-
-## Variables de entorno: referencia completa
-
-| Variable               | Default                          | Notas                                                                                              |
-| ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `FITBIT_CLIENT_ID`     | (requerido)                      | De tu Fitbit dev app.                                                                              |
-| `FITBIT_CLIENT_SECRET` | (requerido)                      | De tu Fitbit dev app.                                                                              |
-| `MCP_BEARER_TOKEN`     | (requerido)                      | Secret que claude.ai manda en `Authorization: Bearer ...`. Genera con `openssl rand -hex 32`.      |
-| `OAUTH_REDIRECT_URI`   | `http://localhost:3000/callback` | URL pública del callback. Debe coincidir con una registrada en tu Fitbit dev app.                  |
-| `OAUTH_PORT`           | `3000`                           | Puerto interno donde escucha el OAuth express server. No suele hacer falta cambiarlo.              |
-| `OAUTH_PERSISTENT`     | `true` (lo pone `entrypoint.sh`) | Si `true`, el OAuth server queda vivo entre flows para permitir re-auth.                           |
-| `PORT`                 | `8000`                           | Puerto del auth-proxy. CapRover suele detectarlo solo.                                             |
-| `SUPERGATEWAY_PORT`    | `8001`                           | Puerto interno de supergateway. No suele hacer falta cambiarlo.                                    |
+| Variable                        | Default        | Notas                                                                 |
+| ------------------------------- | -------------- | --------------------------------------------------------------------- |
+| `GOOGLE_CLIENT_ID`              | (requerido)    | OAuth client tipo Web de Google Cloud.                                |
+| `GOOGLE_CLIENT_SECRET`          | (requerido)    |                                                                       |
+| `PUBLIC_BASE_URL`               | (requerido)    | URL pública https, sin `/` final.                                     |
+| `ALLOWED_EMAILS`                | (requerido)    | Emails de Google autorizados, separados por comas.                    |
+| `DATA_DIR`                      | `/data`        | Dónde se guarda `store.json`.                                         |
+| `PORT`                          | `8000`         |                                                                       |
+| `TRUST_PROXY`                   | `1`            | Saltos de proxy delante (NGINX de CapRover = 1; con Cloudflare, 2).   |
+| `GOOGLE_SCOPES`                 | (ver config)   | Lista de scopes separada por espacios, para quitar o añadir alguno.   |
+| `MCP_ACCESS_TOKEN_TTL_SECONDS`  | `3600`         | Vida de los access tokens MCP.                                        |
+| `MCP_REFRESH_TOKEN_TTL_SECONDS` | `7776000`      | 90 días; se renueva en cada refresh.                                  |
 
 ## Troubleshooting
 
-| Síntoma                                         | Causa probable                                                              |
-| ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `/health` devuelve 200 pero `/sse` cuelga        | NGINX sin `proxy_buffering off` (paso 5).                                   |
-| `/auth` devuelve 502 "OAuth server unavailable"  | El proceso MCP no arranca el OAuth express server. Logs + `OAUTH_PERSISTENT=true`. |
-| `401 unauthorized` en claude.ai                  | Bearer mal copiado.                                                         |
-| Logs: `MCP_BEARER_TOKEN must be set`             | Falta la env var (paso 3).                                                  |
-| `redirect_uri_mismatch` al hacer OAuth           | `OAUTH_REDIRECT_URI` no coincide con lo registrado en Fitbit dev app.       |
-| Tools de write devuelven 403                     | OAuth concedió `r*` solo, no `w*`. Re-OAuth marcando **"View and Log"**.    |
-| Container reinicia en bucle                      | `docker logs` desde el host. Verifica `MCP_COMMAND` y que `build/index.js` exista. |
-| Cross-token: tu mujer logea en tu Fitbit         | Sesión de navegador compartida durante OAuth. Re-OAuth en pestaña incógnito.|
+| Síntoma                                                     | Causa probable                                                                                    |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Claude: "couldn't connect" al añadir el conector            | `PUBLIC_BASE_URL` incorrecta, o falta HTTPS. Comprueba que `/.well-known/oauth-authorization-server` devuelve un `issuer` https. |
+| Google: `redirect_uri_mismatch`                             | Falta `${PUBLIC_BASE_URL}/oauth/google/callback` en el OAuth client de Google.                    |
+| Google: `invalid_scope` / "Some requested scopes were invalid" | Un scope no está disponible: ajusta `GOOGLE_SCOPES` y la pantalla *Data access*.                |
+| Google: "access blocked / app not verified" sin opción de seguir | La cuenta no está como test user (app en *Testing*).                                          |
+| Vuelve a Claude con `access_denied`                         | El email no está en `ALLOWED_EMAILS`.                                                             |
+| Página "Google Health account not set up"                   | Entrar en la app Google Health del móvil y completar la migración.                                |
+| Herramientas: 403 `PERMISSION_DENIED`                       | Se desmarcó algún permiso al conectar, o el registro lo creó otra app (no se puede borrar/editar). |
+| Hay que reconectar cada semana                              | App de Google en *Testing*: publícala (paso 2 de pre-requisitos).                                 |
+| Logs: `rate limit` / 429 en `/token` o `/authorize`         | `TRUST_PROXY` mal ajustado: todas las peticiones parecen venir de la misma IP.                    |

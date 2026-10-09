@@ -1,0 +1,196 @@
+/**
+ * Google Health API data types and enums, grouped by the operations each data
+ * type supports. Source: https://developers.google.com/health/data-types and
+ * the v4 discovery document. Data types that need scopes this server does not
+ * request (ECG, IRN, reproductive health, mindfulness, symptoms) are omitted.
+ */
+
+/** Data types supporting `dataPoints.list` */
+export const LIST_DATA_TYPES = [
+  'active-energy-burned',
+  'active-minutes',
+  'active-zone-minutes',
+  'activity-level',
+  'altitude',
+  'blood-glucose',
+  'body-fat',
+  'core-body-temperature',
+  'daily-heart-rate-variability',
+  'daily-heart-rate-zones',
+  'daily-oxygen-saturation',
+  'daily-respiratory-rate',
+  'daily-resting-heart-rate',
+  'daily-sleep-temperature-derivations',
+  'daily-vo2-max',
+  'distance',
+  'exercise',
+  'food',
+  'food-measurement-unit',
+  'heart-rate',
+  'heart-rate-variability',
+  'height',
+  'hydration-log',
+  'nutrition-log',
+  'oxygen-saturation',
+  'respiratory-rate-sleep-summary',
+  'run-vo2-max',
+  'sedentary-period',
+  'sleep',
+  'steps',
+  'swim-lengths-data',
+  'time-in-heart-rate-zone',
+  'vo2-max',
+  'weight',
+] as const;
+
+/** Data types supporting `dataPoints.get` */
+export const GET_DATA_TYPES = [
+  'blood-glucose',
+  'body-fat',
+  'core-body-temperature',
+  'exercise',
+  'food',
+  'food-measurement-unit',
+  'height',
+  'hydration-log',
+  'nutrition-log',
+  'sleep',
+  'weight',
+] as const;
+
+/** Data types supporting `dataPoints.reconcile` */
+export const RECONCILE_DATA_TYPES = [
+  'active-energy-burned',
+  'active-minutes',
+  'active-zone-minutes',
+  'activity-level',
+  'altitude',
+  'blood-glucose',
+  'body-fat',
+  'core-body-temperature',
+  'daily-heart-rate-variability',
+  'daily-heart-rate-zones',
+  'daily-oxygen-saturation',
+  'daily-respiratory-rate',
+  'daily-resting-heart-rate',
+  'daily-sleep-temperature-derivations',
+  'daily-vo2-max',
+  'distance',
+  'exercise',
+  'floors',
+  'heart-rate',
+  'heart-rate-variability',
+  'height',
+  'hydration-log',
+  'nutrition-log',
+  'oxygen-saturation',
+  'respiratory-rate-sleep-summary',
+  'run-vo2-max',
+  'sedentary-period',
+  'sleep',
+  'steps',
+  'swim-lengths-data',
+  'time-in-heart-rate-zone',
+  'vo2-max',
+  'weight',
+] as const;
+
+/** Data types supporting `dataPoints.rollUp` and `dataPoints.dailyRollUp` */
+export const ROLLUP_DATA_TYPES = [
+  'active-energy-burned',
+  'active-minutes',
+  'active-zone-minutes',
+  'altitude',
+  'blood-glucose',
+  'body-fat',
+  'calories-in-heart-rate-zone',
+  'core-body-temperature',
+  'distance',
+  'floors',
+  'heart-rate',
+  'hydration-log',
+  'nutrition-log',
+  'run-vo2-max',
+  'sedentary-period',
+  'steps',
+  'swim-lengths-data',
+  'time-in-heart-rate-zone',
+  'total-calories',
+  'weight',
+] as const;
+
+/** Short names for `users/me/dataSourceFamilies/{family}` */
+export const DATA_SOURCE_FAMILIES = [
+  'all-sources',
+  'google-wearables',
+  'google-sources',
+  'self-sources',
+] as const;
+
+/** NutritionLog.mealType (MEAL_TYPE_UNSPECIFIED omitted) */
+export const MEAL_TYPES = [
+  'BEFORE_BREAKFAST',
+  'BREAKFAST',
+  'BEFORE_LUNCH',
+  'LUNCH',
+  'BEFORE_DINNER',
+  'DINNER',
+  'AFTER_DINNER',
+  'SNACK',
+  'ANYTIME',
+] as const;
+
+/** NutrientQuantity.nutrient (NUTRIENT_UNSPECIFIED omitted) */
+export const NUTRIENTS = [
+  'BIOTIN',
+  'CAFFEINE',
+  'CALCIUM',
+  'CHLORIDE',
+  'CARBOHYDRATES',
+  'CHOLESTEROL',
+  'CHROMIUM',
+  'COPPER',
+  'DIETARY_FIBER',
+  'FOLIC_ACID',
+  'FOLATE',
+  'IODINE',
+  'IRON',
+  'MAGNESIUM',
+  'MANGANESE',
+  'MOLYBDENUM',
+  'MONOUNSATURATED_FAT',
+  'NIACIN',
+  'PANTOTHENIC_ACID',
+  'PHOSPHORUS',
+  'POLYUNSATURATED_FAT',
+  'POTASSIUM',
+  'PROTEIN',
+  'RIBOFLAVIN',
+  'SATURATED_FAT',
+  'SELENIUM',
+  'SODIUM',
+  'SUGAR',
+  'THIAMIN',
+  'TRANS_FAT',
+  'UNSATURATED_FAT',
+  'VITAMIN_A',
+  'VITAMIN_B6',
+  'VITAMIN_B12',
+  'VITAMIN_C',
+  'VITAMIN_D',
+  'VITAMIN_E',
+  'VITAMIN_K',
+  'ZINC',
+] as const;
+
+/** VolumeQuantity.userProvidedUnit (VOLUME_UNIT_UNSPECIFIED omitted) */
+export const VOLUME_UNITS = [
+  'CUP_IMPERIAL',
+  'CUP_US',
+  'FLUID_OUNCE_IMPERIAL',
+  'FLUID_OUNCE_US',
+  'LITER',
+  'MILLILITER',
+  'PINT_IMPERIAL',
+  'PINT_US',
+] as const;

@@ -31,7 +31,9 @@ export default [
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
-      
+      // TypeScript already checks for undefined identifiers (incl. Node globals and types)
+      'no-undef': 'off',
+
       // Code quality rules
       'no-console': 'off', // Allow console for MCP server logging
       'prefer-const': 'error',
