@@ -74,14 +74,21 @@ describe('helpers', () => {
     });
   });
 
-  it('builds session intervals', () => {
-    expect(sessionInterval('2026-10-09T08:00:00Z', undefined, '7200s')).toEqual(
-      {
-        startTime: '2026-10-09T08:00:00Z',
-        endTime: '2026-10-09T08:00:00Z',
-        startUtcOffset: '7200s',
-        endUtcOffset: '7200s',
-      }
-    );
+  it('builds session intervals ending one minute later by default', () => {
+    expect(
+      sessionInterval('2026-10-09T08:00:00+02:00', undefined, '7200s')
+    ).toEqual({
+      startTime: '2026-10-09T08:00:00+02:00',
+      endTime: '2026-10-09T06:01:00.000Z',
+      startUtcOffset: '7200s',
+      endUtcOffset: '7200s',
+    });
+  });
+
+  it('keeps an explicit end time', () => {
+    expect(
+      sessionInterval('2026-10-09T08:00:00Z', '2026-10-09T08:30:00Z', '0s')
+        .endTime
+    ).toBe('2026-10-09T08:30:00Z');
   });
 });

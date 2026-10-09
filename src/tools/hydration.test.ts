@@ -9,7 +9,7 @@ const extra = {} as ToolExtra;
 const expectedLog = {
   interval: {
     startTime: '2026-10-09T11:00:00+02:00',
-    endTime: '2026-10-09T11:00:00+02:00',
+    endTime: '2026-10-09T09:01:00.000Z',
     startUtcOffset: '7200s',
     endUtcOffset: '7200s',
   },

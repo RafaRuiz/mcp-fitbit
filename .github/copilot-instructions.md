@@ -84,6 +84,7 @@ Optional: `DATA_DIR`, `PORT`, `TRUST_PROXY`, `GOOGLE_SCOPES`, `HEALTH_API_BASE`,
 - Methods: `list` (GET, filter/pageSize/pageToken/dataSourceFamily), `reconcile` (GET), `dailyRollUp` / `rollUp` (POST, body with range), `create` (POST, returns Operation), `patch` (PATCH, full DataPoint), `batchDelete` (POST `{names}`)
 - Filters (AIP-160, `>=` / `<` / `AND`): interval types use `{type}.interval.civil_start_time`, sample types `{type}.sample_time.civil_time`, daily types `{type}.date`, sleep only `sleep.interval.civil_end_time`
 - Page size max 10000 (25 for exercise and sleep); rollup range max 14 days for heart-rate, active-minutes, total-calories, calories-in-heart-rate-zone, 90 days otherwise
+- Session intervals (nutrition-log, hydration-log) need `endTime` strictly after `startTime` (`INVALID_TIME_RANGE`); the write tools default it to start + 1 minute, like the Fitbit app
 - Nutrition logs from anonymous food (foodDisplayName + values) are not editable: delete and re-create
 - There is no food search, custom food creation, saved meals or favorites in this API
 - Rate limit: 300 requests/minute per user

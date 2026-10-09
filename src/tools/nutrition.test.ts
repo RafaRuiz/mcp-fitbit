@@ -67,7 +67,7 @@ describe('nutrition tools', () => {
         nutritionLog: {
           interval: {
             startTime: '2026-10-09T08:30:00+02:00',
-            endTime: '2026-10-09T08:30:00+02:00',
+            endTime: '2026-10-09T06:31:00.000Z',
             startUtcOffset: '7200s',
             endUtcOffset: '7200s',
           },

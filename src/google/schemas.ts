@@ -67,7 +67,13 @@ export function toCivilDate(date: string): {
   return { year, month, day };
 }
 
-/** Builds a SessionTimeInterval; endTime defaults to startTime. */
+/** Default length of a logged session, as the Fitbit app stores logs */
+const DEFAULT_SESSION_MS = 60_000;
+
+/**
+ * Builds a SessionTimeInterval. The API requires endTime to be strictly
+ * after startTime, so it defaults to startTime + 1 minute.
+ */
 export function sessionInterval(
   startTime: string,
   endTime: string | undefined,
@@ -75,7 +81,9 @@ export function sessionInterval(
 ) {
   return {
     startTime,
-    endTime: endTime ?? startTime,
+    endTime:
+      endTime ??
+      new Date(Date.parse(startTime) + DEFAULT_SESSION_MS).toISOString(),
     startUtcOffset: utcOffset,
     endUtcOffset: utcOffset,
   };

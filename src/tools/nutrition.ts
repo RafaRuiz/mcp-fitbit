@@ -41,7 +41,9 @@ ALL nutrient quantities are in GRAMS: convert milligrams (sodium, potassium, cho
       ),
       endTime: timestampSchema
         .optional()
-        .describe('End of the meal (RFC 3339). Defaults to startTime'),
+        .describe(
+          'End of the meal (RFC 3339), strictly after startTime. Defaults to startTime + 1 minute'
+        ),
       utcOffset: utcOffsetSchema,
       mealType: z.enum(MEAL_TYPES).optional().describe('Meal category'),
       foodDisplayName: z

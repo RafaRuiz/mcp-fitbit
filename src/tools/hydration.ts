@@ -31,7 +31,9 @@ const hydrationLogShape = {
   ),
   endTime: timestampSchema
     .optional()
-    .describe('End of the interval (RFC 3339). Defaults to startTime'),
+    .describe(
+      'End of the interval (RFC 3339), strictly after startTime. Defaults to startTime + 1 minute'
+    ),
   utcOffset: utcOffsetSchema,
   milliliters: z
     .number()
