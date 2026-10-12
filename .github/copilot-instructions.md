@@ -86,6 +86,7 @@ Optional: `DATA_DIR`, `PORT`, `TRUST_PROXY`, `GOOGLE_SCOPES`, `HEALTH_API_BASE`,
 - Page size max 10000 (25 for exercise and sleep); rollup range max 14 days for heart-rate, active-minutes, total-calories, calories-in-heart-rate-zone, 90 days otherwise
 - Session intervals (nutrition-log, hydration-log) need `endTime` strictly after `startTime` (`INVALID_TIME_RANGE`); the write tools default it to start + 1 minute, like the Fitbit app
 - Nutrition logs from anonymous food (foodDisplayName + values) are not editable: delete and re-create
+- Only the client that created a data point can delete or patch it: entries from the Fitbit / Google Health apps or the old Fitbit Web API connector (`webClientId` 23V37Q) return `DATA_POINT_NOT_OWNED_BY_CLIENT`
 - There is no food search, custom food creation, saved meals or favorites in this API
 - Rate limit: 300 requests/minute per user
 

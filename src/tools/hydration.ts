@@ -85,7 +85,7 @@ export function registerHydrationTools(server: McpServer, api: HealthApi) {
   registerTool(server, {
     name: 'update_water_log',
     description:
-      'Replace an existing water log entry (PATCH users/me/dataTypes/hydration-log/dataPoints/{id}). Send the full entry, not only the changed fields.',
+      'Replace an existing water log entry (PATCH users/me/dataTypes/hydration-log/dataPoints/{id}). Send the full entry, not only the changed fields. Only entries created through this connector can be changed: entries logged in the Fitbit or Google Health apps, or by any other client (dataSource.application differs), fail with DATA_POINT_NOT_OWNED_BY_CLIENT and must be deleted or edited by the user in the app.',
     inputSchema: { dataPointId: dataPointIdSchema, ...hydrationLogShape },
     annotations: WRITE_ANNOTATIONS,
     handler: async ({ dataPointId, ...params }, extra) => {
@@ -103,7 +103,7 @@ export function registerHydrationTools(server: McpServer, api: HealthApi) {
   registerTool(server, {
     name: 'delete_water_logs',
     description:
-      'Delete water log entries (POST users/me/dataTypes/hydration-log/dataPoints:batchDelete). Entries created by other apps may not be deletable.',
+      'Delete water log entries (POST users/me/dataTypes/hydration-log/dataPoints:batchDelete). Only entries created through this connector can be changed: entries logged in the Fitbit or Google Health apps, or by any other client (dataSource.application differs), fail with DATA_POINT_NOT_OWNED_BY_CLIENT and must be deleted or edited by the user in the app.',
     inputSchema: {
       dataPointIds: z
         .array(dataPointIdSchema)

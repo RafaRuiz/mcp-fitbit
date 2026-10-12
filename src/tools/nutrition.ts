@@ -153,7 +153,7 @@ ALL nutrient quantities are in GRAMS: convert milligrams (sodium, potassium, cho
   registerTool(server, {
     name: 'delete_food_logs',
     description:
-      'Delete food log entries (POST users/me/dataTypes/nutrition-log/dataPoints:batchDelete). Entries created by other apps may not be deletable.',
+      'Delete food log entries (POST users/me/dataTypes/nutrition-log/dataPoints:batchDelete). Only entries created through this connector can be changed: entries logged in the Fitbit or Google Health apps, or by any other client (dataSource.application differs), fail with DATA_POINT_NOT_OWNED_BY_CLIENT and must be deleted or edited by the user in the app.',
     inputSchema: {
       dataPointIds: z
         .array(dataPointIdSchema)

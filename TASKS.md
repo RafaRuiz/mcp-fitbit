@@ -5,7 +5,6 @@ Version 2.0 migrated the server from the Fitbit Web API (shut down 2026-10-30) t
 ## Validate against the live API (Priority: High)
 *   **V2:** Check each filter style once against real data: interval (`steps`, `nutrition_log`), sample (`weight`), daily (`daily_resting_heart_rate.date`) and sleep (`sleep.interval.civil_end_time`).
 *   **V3:** Check which `mealType` values are accepted when creating a nutrition log (the docs mention only BREAKFAST, LUNCH, DINNER and SNACK; SNACK verified) and narrow `MEAL_TYPES` if needed.
-*   **V4:** Check whether `delete_food_logs` / `update_water_log` work on entries created by the Fitbit / Google Health apps (create and delete of entries this server created are verified).
 *   **V5:** Confirm that publishing the Google app ("In production", unverified) removes the 7-day refresh token expiry for the restricted Health scopes.
 
 ## Possible improvements (Priority: Medium)

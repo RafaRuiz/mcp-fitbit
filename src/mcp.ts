@@ -16,7 +16,7 @@ export function createMcpServer(api: HealthApi): McpServer {
   const server = new McpServer(SERVER_INFO, {
     capabilities: { tools: {} },
     instructions:
-      'Tools for the user\'s Google Health (Fitbit) data. Read with list_data_points, reconcile_data_points, daily_rollup and rollup; log food and water with log_food and log_water. Nutrient quantities are always in grams and UTC offsets are durations such as "7200s".',
+      'Tools for the user\'s Google Health (Fitbit) data. Read with list_data_points, reconcile_data_points, daily_rollup and rollup; log food and water with log_food and log_water. Only entries created through this connector can be deleted or edited; anything else must be changed in the Fitbit or Google Health app. Nutrient quantities are always in grams and UTC offsets are durations such as "7200s".',
   });
   registerDataPointTools(server, api);
   registerProfileTools(server, api);

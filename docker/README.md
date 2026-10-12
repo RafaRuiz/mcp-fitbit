@@ -170,6 +170,7 @@ refresh token, que está persistido.
 | Google: "access blocked / app not verified" sin opción de seguir | La cuenta no está como test user (app en *Testing*).                                          |
 | Vuelve a Claude con `access_denied`                         | El email no está en `ALLOWED_EMAILS`.                                                             |
 | Página "Google Health account not set up"                   | Entrar en la app Google Health del móvil y completar la migración.                                |
-| Herramientas: 403 `PERMISSION_DENIED`                       | Se desmarcó algún permiso al conectar, o el registro lo creó otra app (no se puede borrar/editar). |
+| Herramientas: 403 `PERMISSION_DENIED`                       | Se desmarcó algún permiso al conectar.                                                            |
+| Borrar/editar: `DATA_POINT_NOT_OWNED_BY_CLIENT`             | El registro lo creó otra app (la de Fitbit/Google Health o el conector Fitbit antiguo): bórralo desde la app. |
 | Hay que reconectar cada semana                              | App de Google en *Testing*: publícala (paso 2 de pre-requisitos).                                 |
 | Logs: `rate limit` / 429 en `/token` o `/authorize`         | `TRUST_PROXY` mal ajustado: todas las peticiones parecen venir de la misma IP.                    |
